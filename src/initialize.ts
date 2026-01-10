@@ -156,6 +156,12 @@ export const initialize = async () => {
   // initialize clientId before dispatching any actions that create new thoughts
   const clientId = await clientIdReady
 
+  if (new URLSearchParams(window.location.search).get('treecrdt') === '1') {
+    import('./experiments/treecrdtSync')
+      .then(({ startTreecrdtSync }) => startTreecrdtSync())
+      .catch(err => console.error('TreeCRDT sync failed', err))
+  }
+
   const src = urlDataSource()
   const thoughtsLocalPromise =
     owner() === '~'
