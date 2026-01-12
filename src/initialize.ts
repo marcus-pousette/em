@@ -156,9 +156,12 @@ export const initialize = async () => {
   // initialize clientId before dispatching any actions that create new thoughts
   const clientId = await clientIdReady
 
-  if (new URLSearchParams(window.location.search).get('treecrdt') === '1') {
+  const urlParams = new URLSearchParams(window.location.search)
+  const treecrdtParam = urlParams.get('treecrdt')
+  if (treecrdtParam) {
+    const mode = treecrdtParam === 'all' ? 'all' : 'children'
     import('./experiments/treecrdtSync')
-      .then(({ startTreecrdtSync }) => startTreecrdtSync())
+      .then(({ startTreecrdtSync }) => startTreecrdtSync({ mode }))
       .catch(err => console.error('TreeCRDT sync failed', err))
   }
 

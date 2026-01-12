@@ -13,6 +13,8 @@ const debuggingMiddleware: Middleware<any, State, Dispatch> =
     const state = getState()
     const { isLoading, showModal, thoughts } = state
 
+    const emThought = thoughts.thoughtIndex.__EM__
+
     // Try to catch the __EM__ with empty childrenMap bug
     // https://github.com/cybersemics/em/issues/2223
     if (
@@ -20,8 +22,10 @@ const debuggingMiddleware: Middleware<any, State, Dispatch> =
       !isLoading &&
       showModal !== 'welcome' &&
       !isTutorial(state) &&
+      // allow transient "empty" state while __EM__ is still pending
+      !emThought.pending &&
       // after that, it should never be empty
-      Object.keys(thoughts.thoughtIndex.__EM__.childrenMap).length === 0
+      Object.keys(emThought.childrenMap).length === 0
     ) {
       console.error(action)
       throw new Error(

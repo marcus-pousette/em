@@ -22,11 +22,11 @@ const startConnecting = () => {
   stopConnecting()
   // Unless this is a new user, IndexedDB probably already loaded the root thoughts and set the status to synced
   offlineStatusStore.update(statusOld =>
-    statusOld !== 'synced' && statusOld !== 'reconnecting' ? 'connecting' : statusOld,
+    statusOld !== 'synced' && statusOld !== 'connected' && statusOld !== 'reconnecting' ? 'connecting' : statusOld,
   )
   offlineTimer = setTimeout(() => {
     offlineTimer = null
-    offlineStatusStore.update('offline')
+    offlineStatusStore.update(statusOld => (statusOld === 'connected' || statusOld === 'synced' ? statusOld : 'offline'))
   }, offlineTimeout)
 }
 

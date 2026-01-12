@@ -7,6 +7,8 @@ import { createHtmlPlugin } from 'vite-plugin-html'
 import { VitePWA } from 'vite-plugin-pwa'
 import { treecrdt } from '@treecrdt/wa-sqlite/vite-plugin'
 
+const TREECRDT_MONOREPO_ROOT = path.resolve(__dirname, '../../..')
+
 // https://vitejs.dev/config/
 export default defineConfig({
   resolve: {
@@ -17,6 +19,26 @@ export default defineConfig({
   },
   build: {
     outDir: 'build',
+  },
+  server: {
+    fs: {
+      allow: [TREECRDT_MONOREPO_ROOT],
+    },
+    ...(process.env.PUPPETEER
+      ? {
+          // Serve the dev server over HTTPS in puppeteer tests to enable clipboard access
+          https: {
+            key: fs.readFileSync('./src/e2e/puppeteer/puppeteer-key.pem'),
+            cert: fs.readFileSync('./src/e2e/puppeteer/puppeteer.pem'),
+          },
+          // protocol `wss` is required to resolve websocket connection failure
+          hmr: {
+            host: 'host.docker.internal',
+            // wss uses a secure websocket(wss://) connection. This was necessary to resolve mixed content security error which was observed when using ws protocol only.
+            protocol: 'wss',
+          },
+        }
+      : {}),
   },
   plugins: [
     treecrdt(),
@@ -50,21 +72,4 @@ export default defineConfig({
     // minify and add EJS capabilities to index.html
     createHtmlPlugin({ minify: true }),
   ],
-  ...(process.env.PUPPETEER
-    ? {
-        // Serve the dev server over HTTPS in puppeteer tests to enable clipboard access
-        server: {
-          https: {
-            key: fs.readFileSync('./src/e2e/puppeteer/puppeteer-key.pem'),
-            cert: fs.readFileSync('./src/e2e/puppeteer/puppeteer.pem'),
-          },
-          // protocol `wss` is required to resolve websocket connection failure
-          hmr: {
-            host: 'host.docker.internal',
-            // wss uses a secure websocket(wss://) connection. This was necessary to resolve mixed content security error which was observed when using ws protocol only.
-            protocol: 'wss',
-          },
-        },
-      }
-    : {}),
 })

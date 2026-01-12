@@ -25,6 +25,22 @@ Start the dev server for local development:
 yarn start
 ```
 
+## TreeCRDT sync experiment
+
+See `src/experiments/README.md` for running the TreeCRDT-backed sync experiment (includes a partial sync demo and cross window em thought sync via a TreeCRDT server).
+
+Quick start:
+
+```sh
+yarn treecrdt:sync-server:setup
+yarn treecrdt:sync-server
+VITE_TREECRDT_SYNC_WS_BASE=ws://localhost:8787 yarn start
+```
+
+Then open two tabs to the same thoughtspace:
+
+- `http://localhost:3000/?share=treecrdt-manual-1&treecrdt=1`
+
 ## Testing
 
 There are two testing scripts:

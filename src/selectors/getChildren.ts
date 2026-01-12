@@ -114,8 +114,34 @@ export const findAnyChild = (
   return childId ? getThoughtById(state, childId) : undefined
 }
 /** Returns true if the context has any visible children. */
-export const hasChildren = (state: State, id: ThoughtId): boolean =>
-  !!findAnyChild(state, id, child => state.showHiddenThoughts || isVisible(state, child))
+export const hasChildren = (state: State, id: ThoughtId): boolean => {
+  const thought = getThoughtById(state, id)
+  if (!thought) return false
+
+  const { childrenMap } = thought
+  const showHidden = state.showHiddenThoughts
+
+  for (const key in childrenMap) {
+    if (!Object.prototype.hasOwnProperty.call(childrenMap, key)) continue
+
+    // If hidden thoughts are shown, any child (including meta attributes) counts.
+    if (showHidden) return true
+
+    // Meta attribute children are keyed by value (e.g. "=style") and should not count as visible children.
+    if (key.startsWith('=')) continue
+
+    const childId = childrenMap[key]
+    const child = getThoughtById(state, childId)
+
+    // If the child isn't loaded yet, treat it as existing so parents don't get misclassified
+    // as leaves during partial replication.
+    if (!child) return true
+
+    if (isVisible(state, child)) return true
+  }
+
+  return false
+}
 
 /** Gets all children of a thought sorted by rank. Returns a new object reference even if the children have not changed. */
 export const getChildrenRanked = (state: State, thoughtId: ThoughtId | null): Thought[] => {

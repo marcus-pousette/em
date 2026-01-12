@@ -50,7 +50,10 @@
     "test:ios": "jest ./src/e2e/iOS --verbose",
     "test:puppeteer": "./src/e2e/puppeteer/test-puppeteer.sh",
     "test": "vitest --project unit",
-    "websocket-server": "cd server && yarn build && yarn start"
+    "websocket-server": "cd server && yarn build && yarn start",
+    "treecrdt:sync-server:setup": "yarn workspace em-treecrdt-sync-server setup",
+    "treecrdt:sync-server": "yarn workspace em-treecrdt-sync-server dev",
+    "treecrdt:dev:treecrdt": "npm-run-all --parallel treecrdt:sync-server start"
   },
   "lockfile-lint": {
     "allowed-schemes": [
@@ -84,10 +87,12 @@
     "packages/*",
     "../../packages/treecrdt-benchmark",
     "../../packages/treecrdt-riblt-wasm-js",
+    "../../packages/treecrdt-sqlite-node",
     "../../packages/treecrdt-sync",
     "../../packages/treecrdt-ts",
     "../../packages/treecrdt-wa-sqlite",
-    "../../packages/treecrdt-wa-sqlite-vendor"
+    "../../packages/treecrdt-wa-sqlite-vendor",
+    "../../packages/sync-server/core"
   ],
   "dependencies": {
     "@capacitor/android": "^8.0.0",

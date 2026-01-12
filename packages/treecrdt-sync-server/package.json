@@ -1,0 +1,22 @@
+{
+  "name": "em-treecrdt-sync-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node src/setup.js",
+    "dev": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@treecrdt/interface": "workspace:*",
+    "@treecrdt/sqlite-node": "workspace:*",
+    "@treecrdt/sync": "workspace:*",
+    "@treecrdt/sync-server-core": "workspace:*",
+    "better-sqlite3": "^12.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.9.2",
+    "tsx": "^4.19.2",
+    "typescript": "5.9.3"
+  }
+}
