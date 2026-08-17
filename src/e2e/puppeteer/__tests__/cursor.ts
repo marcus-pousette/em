@@ -97,7 +97,7 @@ it('set the cursor on the cursor grandparent', async () => {
   expect(thoughtValue).toBe('a')
 })
 
-it('do nothing when clicking on a hidden ancestor', async () => {
+it('do nothing when clicking on a hidden ancestor shim', async () => {
   const importText = `
   - a
     - b
@@ -114,7 +114,7 @@ it('do nothing when clicking on a hidden ancestor', async () => {
   expect(thoughtValue).toBe('d')
 })
 
-it('do nothing when clicking on a hidden great uncle', async () => {
+it('do nothing when clicking on a hidden great uncle shim', async () => {
   const importText = `
   - a
     - b
