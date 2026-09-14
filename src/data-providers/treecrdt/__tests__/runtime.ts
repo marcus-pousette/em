@@ -19,7 +19,6 @@ let createRealTreecrdtClient!: TreecrdtModule['createTreecrdtClient']
 
 const emptyUpdates = {
   thoughtIndexUpdates: {},
-  lexemeIndexUpdates: {},
 }
 
 beforeAll(async () => {
@@ -147,7 +146,10 @@ it('rejects queued startup reads and writes when initialization fails and uses a
   const retriedRead = treecrdtThoughtspace.db.getThoughtById(EM_TOKEN)
   await treecrdtThoughtspace.init({ storage: 'memory' })
   await expect(retriedRead).resolves.toMatchObject({ id: EM_TOKEN })
-  await expect(treecrdtThoughtspace.db.updateThoughts(emptyUpdates)).resolves.toEqual([])
+  await expect(treecrdtThoughtspace.db.updateThoughts(emptyUpdates)).resolves.toEqual({
+    operations: [],
+    lexemeIndex: {},
+  })
   await treecrdtThoughtspace.drop()
 })
 
@@ -167,7 +169,10 @@ it('rejects writes queued before each settled drop and creates a fresh gate for 
   await Promise.all([treecrdtThoughtspace.drop(), secondWriteExpectation])
 
   await treecrdtThoughtspace.init({ storage: 'memory' })
-  await expect(treecrdtThoughtspace.db.updateThoughts(emptyUpdates)).resolves.toEqual([])
+  await expect(treecrdtThoughtspace.db.updateThoughts(emptyUpdates)).resolves.toEqual({
+    operations: [],
+    lexemeIndex: {},
+  })
   await treecrdtThoughtspace.drop()
 })
 

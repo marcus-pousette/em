@@ -7,6 +7,7 @@ import type Timestamp from '../../@types/Timestamp'
 import { EM_TOKEN, GLOBAL_ROOT_TOKEN, ROOT_PARENT_ID, SETTINGS_TOKEN, SETTINGS_VALUE } from '../../constants'
 import testFlags from '../../e2e/testFlags'
 import { childrenMapKey } from '../../util/createChildrenMap'
+import hashThought from '../../util/hashThought'
 import isAttribute from '../../util/isAttribute'
 import sleep from '../../util/sleep'
 import type { DataProvider } from '../DataProvider'
@@ -152,12 +153,13 @@ const getTreecrdtPlacement = async (
   return { type: 'after', after: afterId }
 }
 
-/** Applies thought index updates and move placements to one exact TreeCRDT client. */
+/** Applies thought updates and collects the old/new membership keys using the same storage reads. */
 const updateThoughtsForClient = async (
   { client, replicaId }: TreecrdtClientIdentity,
   { thoughtIndexUpdates, movePlacements }: Parameters<DataProvider['updateThoughts']>[0],
-): Promise<readonly Operation[]> => {
+): Promise<{ operations: readonly Operation[]; lexemeKeys: string[] }> => {
   const ops: Operation[] = []
+  const lexemeKeys = new Set<string>()
 
   const updates: Index<Thought> = {}
   const deletes: ThoughtId[] = []
@@ -168,10 +170,13 @@ const updateThoughtsForClient = async (
       deletes.push(thoughtId)
     } else {
       updates[thoughtId] = thought
+      lexemeKeys.add(hashThought(thought.value))
     }
   }
 
   for (const id of deletes) {
+    const payload = await client.tree.getPayload(id)
+    if (payload) lexemeKeys.add(hashThought(decodeThoughtPayload(payload).value))
     ops.push(await client.local.delete(replicaId, id, createTreecrdtLocalWriteOptions()))
     await deleteAttributeChild(client, id)
   }
@@ -207,6 +212,7 @@ const updateThoughtsForClient = async (
     } else {
       const existing = await getThoughtByIdFromClient(client, thoughtId)
       if (!existing) continue
+      lexemeKeys.add(hashThought(existing.value))
 
       const parentChanged = existing.parentId !== thought.parentId
       const valueChanged = existing.value !== thought.value
@@ -239,7 +245,7 @@ const updateThoughtsForClient = async (
     }
   }
 
-  return ops
+  return { operations: ops, lexemeKeys: [...lexemeKeys] }
 }
 
 const ROOT_PAYLOAD = encodeThoughtPayload({
@@ -326,9 +332,12 @@ const createClientDataProvider = (
     return Promise.all(ids.map(id => getThoughtByIdFromClient(client, id)))
   },
   updateThoughts: async updates => {
-    const ops = await updateThoughtsForClient({ client, replicaId }, updates)
-    await lexemes.waitForIdle()
-    return ops
+    const { operations, lexemeKeys } = await updateThoughtsForClient({ client, replicaId }, updates)
+    const values = await lexemes.getLexemesByIds(lexemeKeys)
+    return {
+      operations,
+      lexemeIndex: Object.fromEntries(lexemeKeys.map((key, i) => [key, values[i] ?? null])),
+    }
   },
 })
 

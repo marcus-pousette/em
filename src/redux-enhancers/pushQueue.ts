@@ -9,6 +9,7 @@ import db, { thoughtspaceRuntime } from '../data-providers/thoughtspace'
 import contextToThoughtId from '../selectors/contextToThoughtId'
 import { getChildrenRanked } from '../selectors/getChildren'
 import getThoughtById from '../selectors/getThoughtById'
+import createId from '../util/createId'
 import debugLog from '../util/debugLog'
 import isAttribute from '../util/isAttribute'
 import keyValueBy from '../util/keyValueBy'
@@ -54,9 +55,11 @@ const cacheSetting = (name: keyof typeof cachedSettingsIds, value: string | null
 const pushQueue: StoreEnhancer<any> =
   (createStore: StoreEnhancerStoreCreator) =>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  <A extends Action<any>>(reducer: (state: any, action: A) => any, initialState: any): Store<State, A> =>
-    createStore((state: State | undefined = initialState, action: A): State => {
+  <A extends Action<any>>(reducer: (state: any, action: A) => any, initialState: any): Store<State, A> => {
+    let generation = 0
+    const store = createStore((state: State | undefined = initialState, action: A): State => {
       if (!state) return reducer(initialState, action)
+      if (action.type === 'clear') generation++
 
       // apply reducer and clear push queue
       const stateNew: State = reducer(state, action)
@@ -68,6 +71,7 @@ const pushQueue: StoreEnhancer<any> =
       const { dbQueue, freeQueue } = _.groupBy(stateNew.pushQueue, batch =>
         batch.local || batch.remote ? 'dbQueue' : 'freeQueue',
       ) as { dbQueue?: PushBatch[]; freeQueue?: PushBatch[] }
+      const writes = (dbQueue ?? []).map(batch => ({ batch, writeId: createId() }))
 
       if (
         dbQueue?.some(
@@ -111,24 +115,26 @@ const pushQueue: StoreEnhancer<any> =
           })
         }
 
-        /** Pushes queued updates to the active thoughtspace provider sequentially. */
-        const applyDbQueue = async () => {
-          await thoughtspaceRuntime.persistPushQueueBatches(
-            (dbQueue ?? []).map(batch => ({
+        const writeGeneration = generation
+        const writeIds = writes.map(write => write.writeId)
+        void thoughtspaceRuntime
+          .persistPushQueueBatches(
+            writes.map(({ batch }) => ({
               thoughtIndexUpdates: batch.thoughtIndexUpdates,
-              lexemeIndexUpdates: batch.lexemeIndexUpdates,
               movePlacements: batch.movePlacements,
               local: batch.local,
             })),
           )
-        }
-
-        void applyDbQueue()
-          .then(() => {
+          .then(lexemeIndex => {
+            if (generation !== writeGeneration) return
+            store.dispatch({ type: 'acknowledgeThoughtWrites', writeIds, lexemeIndex } as unknown as A)
             dbQueue?.forEach(batch => batch.idbSynced?.())
             debugLog.log('pushSynced', { thoughtCount: thoughtUpdates.length })
           })
           .catch(err => {
+            if (generation === writeGeneration) {
+              store.dispatch({ type: 'acknowledgeThoughtWrites', writeIds, error: String(err) } as unknown as A)
+            }
             console.error('Thoughtspace persistence failed', err)
             debugLog.log('pushError', { error: String(err) })
           })
@@ -152,7 +158,20 @@ const pushQueue: StoreEnhancer<any> =
       })
 
       // clear push queue
-      return { ...stateNew, pushQueue: [] }
+      return {
+        ...stateNew,
+        pushQueue: [],
+        pendingThoughtWrites: {
+          ...stateNew.pendingThoughtWrites,
+          ...Object.fromEntries(
+            writes.flatMap(({ batch, writeId }) =>
+              Object.entries(batch.thoughtIndexUpdates).map(([id, thought]) => [id, { writeId, thought }]),
+            ),
+          ),
+        },
+      }
     }, initialState)
+    return store
+  }
 
 export default pushQueue

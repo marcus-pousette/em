@@ -14,6 +14,7 @@ import PushBatch from './PushBatch'
 import RecentlyEditedTree from './RecentlyEditedTree'
 import SimplePath from './SimplePath'
 import StorageCache from './StorageCache'
+import Thought from './Thought'
 import ThoughtId from './ThoughtId'
 import ThoughtIndices from './ThoughtIndices'
 import Timestamp from './Timestamp'
@@ -135,6 +136,8 @@ interface State {
    * See: /redux-enhancers/pushQueue.ts.
    */
   pushQueue: PushBatch[]
+  /** Latest unconfirmed persistence write per thought; independent of unloaded Thought.pending flags and undo history. */
+  pendingThoughtWrites: Index<{ writeId: string; thought: Thought | null; error?: string }>
   recentlyEdited: RecentlyEditedTree
   /** Redo history. Contains diffs that can be applied to State to restore actions that were reverted with undo. State.redoPatches[0] is the oldest action that was undone. */
   redoPatches: Patch[]

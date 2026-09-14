@@ -1,4 +1,3 @@
-import type { Operation } from '@treecrdt/interface'
 import { type ClientOptions, type TreecrdtClient, createTreecrdtClient } from '@treecrdt/wa-sqlite'
 import type { DataProvider } from '../DataProvider'
 import { initPermissionsStore } from '../permissionsStore'
@@ -14,10 +13,6 @@ import { getMaterializedThoughtsToStoreVersion, waitForMaterializedThoughtsToSto
 import createTreecrdtWebSocketSync from './sync/treecrdtWebSocketSync'
 import createTreecrdtDataProvider from './thoughtspace'
 import { getTreecrdtWriteBarrierVersion, waitForTreecrdtWriteBarrier, withTreecrdtWriteBarrier } from './writeBarrier'
-
-type PersistTreecrdtBatch = Parameters<DataProvider['updateThoughts']>[0] & {
-  local?: boolean
-}
 
 /** One app-scoped TreeCRDT thoughtspace with its bound data provider and lifecycle. */
 interface TreecrdtThoughtspace extends ThoughtspaceRuntime {
@@ -152,15 +147,18 @@ const createTreecrdtThoughtspace = (): TreecrdtThoughtspace => {
   const db: DataProvider = { ...provider.db, clear: drop }
 
   /** Persists push queue batches through the bound provider and forwards local ops to remote sync. */
-  const persistPushQueueBatches = (batches: readonly PersistTreecrdtBatch[]): Promise<void> =>
+  const persistPushQueueBatches: ThoughtspaceRuntime['persistPushQueueBatches'] = batches =>
     withTreecrdtWriteBarrier(async () => {
+      const lexemeIndex: Awaited<ReturnType<ThoughtspaceRuntime['persistPushQueueBatches']>> = {}
       for (const batch of batches) {
         const { local: isLocal, ...updates } = batch
-        const maybeOps = await db.updateThoughts(updates)
-        if (isLocal && Array.isArray(maybeOps) && maybeOps.length > 0) {
-          void websocketSync.pushLocalOps(maybeOps as readonly Operation[])
+        const result = await db.updateThoughts(updates)
+        Object.assign(lexemeIndex, result.lexemeIndex)
+        if (isLocal && result.operations.length > 0) {
+          void websocketSync.pushLocalOps(result.operations)
         }
       }
+      return lexemeIndex
     })
 
   /** Opens and binds one client. Lifecycle serialization provides retryable single-flight behavior. */

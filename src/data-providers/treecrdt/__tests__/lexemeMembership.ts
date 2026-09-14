@@ -7,7 +7,7 @@ import type { ThoughtspaceMaterializationBridge, ThoughtspaceMaterializationSnap
 import { encodeThoughtPayload } from '../payload'
 import { waitForMaterializedThoughtsToStore } from '../sync/materializationQueue'
 import createTreecrdtDataProvider from '../thoughtspace'
-import { withTreecrdtWriteBarrier } from '../writeBarrier'
+import { createTreecrdtLocalWriteOptions, withTreecrdtWriteBarrier } from '../writeBarrier'
 
 const A = '00000000000000000000000000000401' as ThoughtId
 const B = '00000000000000000000000000000402' as ThoughtId
@@ -114,7 +114,7 @@ it('repairs an interrupted index update on reopen without checkpointing later wr
 it('does not publish a stale membership read over an intervening optimistic edit', async () => {
   let snapshot: ThoughtspaceMaterializationSnapshot = { thoughtIndex: {}, lexemeIndex: {} }
   const published: string[][] = []
-  const db = await bind({
+  await bind({
     getSnapshot: () => snapshot,
     apply: updates => {
       snapshot = {
@@ -151,7 +151,7 @@ it('does not publish a stale membership read over an intervening optimistic edit
   const first = { ...before, value: 'dog' }
   snapshot = { ...snapshot, thoughtIndex: { ...snapshot.thoughtIndex, [A]: first } }
   await withTreecrdtWriteBarrier(() =>
-    db.updateThoughts({ thoughtIndexUpdates: { [A]: first }, lexemeIndexUpdates: {} }),
+    client.local.payload(replica, A, payload('dog'), createTreecrdtLocalWriteOptions()),
   )
   await readStarted
 
@@ -159,7 +159,7 @@ it('does not publish a stale membership read over an intervening optimistic edit
   snapshot = { ...snapshot, thoughtIndex: { ...snapshot.thoughtIndex, [A]: second } }
   published.length = 0
   const write = withTreecrdtWriteBarrier(() =>
-    db.updateThoughts({ thoughtIndexUpdates: { [A]: second }, lexemeIndexUpdates: {} }),
+    client.local.payload(replica, A, payload('bird'), createTreecrdtLocalWriteOptions()),
   )
   releaseRead()
   await write

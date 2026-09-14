@@ -1,3 +1,4 @@
+import type { Operation } from '@treecrdt/interface'
 import Index from '../@types/IndexType'
 import Lexeme from '../@types/Lexeme'
 import Thought from '../@types/Thought'
@@ -13,12 +14,11 @@ export interface DataProvider<T extends any[] = any> {
   getLexemesByIds: (keys: string[]) => Promise<(Lexeme | undefined)[]>
   getThoughtById: (id: ThoughtId) => Promise<Thought | undefined>
   getThoughtsByIds: (ids: ThoughtId[]) => Promise<(Thought | undefined)[]>
-  /** Resolved value is provider-specific; the treecrdt provider returns `readonly Operation[]` for local tree mutations. */
+  /** Commits thoughts and returns complete memberships for the affected old and new values, including no-op writes. */
   updateThoughts: (args: {
     thoughtIndexUpdates: Index<Thought | null>
-    lexemeIndexUpdates: Index<Lexeme | null>
     movePlacements?: Index<ThoughtId | null>
-  }) => Promise<unknown>
+  }) => Promise<{ operations: readonly Operation[]; lexemeIndex: Index<Lexeme | null> }>
   freeThought: (id: ThoughtId) => Promise<void>
   freeLexeme: (key: string) => Promise<void>
 

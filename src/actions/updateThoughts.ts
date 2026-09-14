@@ -16,9 +16,11 @@ import { registerActionMetadata } from '../util/actionMetadata.registry'
 import head from '../util/head'
 import keyValueBy from '../util/keyValueBy'
 import mergeUpdates from '../util/mergeUpdates'
+import projectLexemes from '../util/projectLexemes'
 import reducerFlow from '../util/reducerFlow'
 
-export type UpdateThoughtsOptions = PushBatch & {
+export type UpdateThoughtsOptions = Omit<PushBatch, 'lexemeIndexUpdates'> & {
+  lexemeIndexUpdates?: PushBatch['lexemeIndexUpdates']
   cursorOffset?: number
   // callback for when the updates have been synced with IDB
   idbSynced?: () => void
@@ -81,7 +83,7 @@ const updateThoughts = (
   state: State,
   {
     cursorOffset,
-    lexemeIndexUpdates,
+    lexemeIndexUpdates = {},
     thoughtIndexUpdates,
     recentlyEdited,
     pendingDeletes,
@@ -134,7 +136,12 @@ const updateThoughts = (
 
   // TODO: Can we use { overwritePending: !local } and get rid of the overwritePending option to updateThoughts? i.e. Are there any false positives when local is false?
   const thoughtIndex = mergeUpdates(thoughtIndexOld, thoughtIndexUpdatesFresh, { overwritePending })
-  const lexemeIndex = mergeUpdates(lexemeIndexOld, lexemeIndexUpdates, { overwritePending })
+  const lexemeIndex = projectLexemes(
+    mergeUpdates(lexemeIndexOld, lexemeIndexUpdates, { overwritePending }),
+    local || remote
+      ? thoughtIndexUpdatesFresh
+      : Object.fromEntries(Object.entries(state.pendingThoughtWrites).map(([id, write]) => [id, write.thought])),
+  )
 
   const recentlyEditedNew = recentlyEdited || state.recentlyEdited
 

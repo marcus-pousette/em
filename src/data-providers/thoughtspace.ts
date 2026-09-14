@@ -39,7 +39,7 @@ export interface ThoughtspaceRuntime {
   init: (options: ThoughtspaceRuntimeInitOptions) => Promise<{ clientId: string; storage: string }>
   drop: () => Promise<unknown>
   waitForIdle: () => Promise<void>
-  persistPushQueueBatches: (batches: readonly PersistThoughtspaceBatch[]) => Promise<void>
+  persistPushQueueBatches: (batches: readonly PersistThoughtspaceBatch[]) => Promise<Index<Lexeme | null>>
 }
 
 const treecrdtThoughtspace = createTreecrdtThoughtspace()

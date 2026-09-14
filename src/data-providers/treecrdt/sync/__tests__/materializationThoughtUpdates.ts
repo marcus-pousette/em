@@ -41,7 +41,7 @@ const fakeProvider = (thoughts: Index<Thought>): DataProvider => ({
   getLexemesByIds: async keys => keys.map(() => undefined),
   getThoughtById: async (id: ThoughtId) => thoughts[id],
   getThoughtsByIds: async ids => ids.map(id => thoughts[id]),
-  updateThoughts: async () => undefined,
+  updateThoughts: async () => ({ operations: [], lexemeIndex: {} }),
   freeThought: async () => undefined,
   freeLexeme: async () => undefined,
 })
