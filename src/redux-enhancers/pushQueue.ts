@@ -126,8 +126,9 @@ const pushQueue: StoreEnhancer<any> =
             })),
           )
           .then(lexemeIndex => {
-            if (generation !== writeGeneration) return
-            store.dispatch({ type: 'acknowledgeThoughtWrites', writeIds, lexemeIndex } as unknown as A)
+            if (generation === writeGeneration) {
+              store.dispatch({ type: 'acknowledgeThoughtWrites', writeIds, lexemeIndex } as unknown as A)
+            }
             dbQueue?.forEach(batch => batch.idbSynced?.())
             debugLog.log('pushSynced', { thoughtCount: thoughtUpdates.length })
           })

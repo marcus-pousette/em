@@ -146,6 +146,8 @@ it('retains a failed edit until a later successful edit supersedes it', async ()
 it('does not publish a previous generation after clearing Redux during a write', async () => {
   store.dispatch(importText({ text: '- cat' }))
   await waitForThoughtspaceIdle()
+  const thought = contextToThought(store.getState(), ['cat'])!
+  const persisted = vi.fn()
   const started = deferred()
   const released = deferred()
   const payload = client.local.payload.bind(client.local)
@@ -155,7 +157,12 @@ it('does not publish a previous generation after clearing Redux during a write',
     return payload(...args)
   })
 
-  store.dispatch(editThought(['cat'], 'dog'))
+  store.dispatch(
+    updateThoughts({
+      thoughtIndexUpdates: { [thought.id]: { ...thought, value: 'dog' } },
+      idbSynced: persisted,
+    }),
+  )
   await started.promise
   store.dispatch(clear())
   released.resolve()
@@ -163,4 +170,5 @@ it('does not publish a previous generation after clearing Redux during a write',
 
   expect(store.getState().pendingThoughtWrites).toEqual({})
   expect(getLexeme(store.getState(), 'dog')).toBeUndefined()
+  expect(persisted).toHaveBeenCalledOnce()
 })
