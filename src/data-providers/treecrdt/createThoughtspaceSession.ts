@@ -26,7 +26,7 @@ type PendingWrite = {
 }
 
 type Snapshot = {
-  /** Local publication order, not a CRDT clock or a remote-sync acknowledgement. */
+  /** Counts committed reads, not pending edits, CRDT time, or remote-sync acknowledgements. */
   readonly revision: number
   readonly committed: Readonly<View>
   readonly pending: readonly PendingWrite[]
