@@ -19,6 +19,12 @@ Thoughts live in `state.thoughts.thoughtIndex` (keyed by `ThoughtId`) and `state
 
 Thoughts that are known to exist but haven't been loaded yet are flagged with `pending: true` so the UI can render placeholder rows while the pull queue fetches them.
 
+### Experimental committed/pending session
+
+[`createThoughtspaceSession`](../src/data-providers/treecrdt/createThoughtspaceSession.ts) is an executable prototype, not part of the Redux runtime. Its `apply` method accepts create/edit/leaf-delete intents and returns `{ writeId, done }`; `getSnapshot` separates committed text/memberships from pending writes and their projected view. Memberships marked `complete: false` contain optimistic occurrences but have not yet been read from storage. Completion removes only the matching write, including no-ops. Provider I/O is serialized, while pending edits publish immediately; a failure pauses further I/O until reopening and preserves unconfirmed edits. A failed confirmation does not guarantee that the underlying write rolled back.
+
+The session borrows a client exclusively and detaches on `close`; its caller owns the client's lifetime. Its revision is local publication order, not a storage frontier. It does not handle concurrent external writers, inbound sync, optimistic tree structure, or subtree deletion. Integrating it requires migrating the action/history and pull paths; the existing materialization bridge below remains unchanged. The [real-storage session tests](../src/data-providers/treecrdt/__tests__/createThoughtspaceSession.ts) demonstrate the proposed boundary.
+
 ## Local persistence (TreeCRDT + SQLite)
 
 ### The TreeCRDT client
