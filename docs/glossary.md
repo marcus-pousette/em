@@ -220,6 +220,6 @@ A flat reference of project-specific terms used in code and docs. For deeper con
 
 ## W
 
-**write barrier** — [`writeBarrier.ts`](../src/data-providers/treecrdt/writeBarrier.ts). Serializes em → TreeCRDT persistence and exposes an idle barrier, so a materialization refresh cannot reapply stale rows over newer optimistic state. Also mints each write's *writeId*.
+**write barrier** — [`writeBarrier.ts`](../src/data-providers/treecrdt/writeBarrier.ts). Serializes provider reads, local/incoming writes, derived indexing, and committed publication. Redux edits remain synchronous and are overlaid when committed data arrives. Also mints each write's *writeId*.
 
 **writeId** — Identifies an app write, namespaced by page load and echoed on its TreeCRDT materialization changes. Redux writes include the thoughtspace generation so results from before a store reset can be discarded. Direct provider writes use a counter instead.

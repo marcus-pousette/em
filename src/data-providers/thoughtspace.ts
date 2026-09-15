@@ -20,7 +20,8 @@ export type ThoughtspaceMaterializationSnapshot = {
 
 export type ThoughtspaceMaterializationBridge = {
   getSnapshot: () => ThoughtspaceMaterializationSnapshot
-  apply: (updates: ThoughtUpdates) => void | Promise<void>
+  /** Synchronously publishes committed data and confirms its writes before another storage job starts. */
+  apply: (updates: ThoughtUpdates & { writeIds?: string[] }) => void
 }
 
 export type ThoughtspaceRuntimeInitOptions = {
@@ -40,7 +41,7 @@ export interface ThoughtspaceRuntime {
   init: (options: ThoughtspaceRuntimeInitOptions) => Promise<{ clientId: string; storage: string }>
   drop: () => Promise<unknown>
   waitForIdle: () => Promise<void>
-  persistPushQueueBatches: (batches: readonly PersistThoughtspaceBatch[]) => Promise<Index<Lexeme | null>>
+  persistPushQueueBatches: (batches: readonly PersistThoughtspaceBatch[]) => Promise<void>
 }
 
 const treecrdtThoughtspace = createTreecrdtThoughtspace()

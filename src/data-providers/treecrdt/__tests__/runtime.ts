@@ -1,4 +1,5 @@
 import { EM_TOKEN } from '../../../constants'
+import deferred from '../../../test-helpers/deferred'
 import { tsid } from '../../thoughtspaceSession'
 import createTreecrdtThoughtspace from '../runtime'
 
@@ -96,6 +97,39 @@ it('coalesces concurrent initialization into one client', async () => {
   expect(mockCreateTreecrdtClient).toHaveBeenCalledTimes(1)
 
   await treecrdtThoughtspace.drop()
+})
+
+it('waits for startup writes to be published before reporting idle', async () => {
+  const started = deferred()
+  const released = deferred()
+  mockCreateTreecrdtClient.mockImplementationOnce(async options => {
+    started.resolve()
+    await released.promise
+    return createRealTreecrdtClient(options)
+  })
+  const treecrdtThoughtspace = createTreecrdtThoughtspace()
+  const order: string[] = []
+  const initialized = treecrdtThoughtspace.init({
+    storage: 'memory',
+    materialization: {
+      getSnapshot: () => ({ generation: 0, thoughtIndex: {}, lexemeIndex: {} }),
+      apply: () => {
+        order.push('published')
+      },
+    },
+  })
+  await started.promise
+  const write = treecrdtThoughtspace.persistPushQueueBatches([
+    { ...emptyUpdates, local: true, writeId: 'generation:0:startup' },
+  ])
+  const idle = treecrdtThoughtspace.waitForIdle().then(() => {
+    order.push('idle')
+  })
+  released.resolve()
+  await Promise.all([initialized, write, idle])
+  await treecrdtThoughtspace.drop()
+
+  expect(order).toEqual(['published', 'idle'])
 })
 
 it('serializes an in-flight init, drop, and following init', async () => {

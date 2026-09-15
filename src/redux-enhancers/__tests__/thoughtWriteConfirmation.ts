@@ -1,3 +1,5 @@
+import type { Operation } from '@treecrdt/interface'
+import type { TreecrdtWebSocketSyncClient } from '@treecrdt/sync'
 import { type TreecrdtClient, createTreecrdtClient } from '@treecrdt/wa-sqlite'
 import { categorizeActionCreator as categorize } from '../../actions/categorize'
 import { clearActionCreator as clear } from '../../actions/clear'
@@ -18,6 +20,7 @@ import getLexeme from '../../selectors/getLexeme'
 import store from '../../stores/app'
 import { addMulticursorAtFirstMatchActionCreator as addMulticursor } from '../../test-helpers/addMulticursorAtFirstMatch'
 import contextToThought from '../../test-helpers/contextToThought'
+import deferred from '../../test-helpers/deferred'
 import { deleteThoughtAtFirstMatchActionCreator as deleteThought } from '../../test-helpers/deleteThoughtAtFirstMatch'
 import { editThoughtByContextActionCreator as editThought } from '../../test-helpers/editThoughtByContext'
 import initStore from '../../test-helpers/initStore'
@@ -26,22 +29,39 @@ import { setCursorFirstMatchActionCreator as setCursor } from '../../test-helper
 import waitForThoughtspaceIdle from '../../test-helpers/waitForThoughtspaceIdle'
 import createId from '../../util/createId'
 
+let syncClient: TreecrdtWebSocketSyncClient
+
 vi.mock('@treecrdt/wa-sqlite', async importOriginal => {
   const actual = await importOriginal<typeof import('@treecrdt/wa-sqlite')>()
   return { ...actual, createTreecrdtClient: vi.fn(actual.createTreecrdtClient) }
 })
 
+// Capture the actual queued client supplied to sync without opening a network connection in store tests.
+vi.mock('../../data-providers/treecrdt/sync/treecrdtWebSocketSync', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../data-providers/treecrdt/sync/treecrdtWebSocketSync')>()
+  return {
+    default: () => {
+      const sync = actual.default()
+      return {
+        ...sync,
+        tryStartFromEnv: (boundClient: TreecrdtWebSocketSyncClient) => {
+          syncClient = boundClient
+          return sync.tryStartFromEnv(boundClient)
+        },
+      }
+    },
+  }
+})
+
 const remoteReplica = new Uint8Array(32).fill(9)
 let client: TreecrdtClient
+let remote: TreecrdtClient
 let cleanup: () => void
 
-/** Controls an external I/O boundary without replacing provider or Redux behavior. */
-const deferred = () => {
-  let resolve!: () => void
-  const promise = new Promise<void>(complete => {
-    resolve = complete
-  })
-  return { promise, resolve }
+/** Authors an operation on another replica and receives it through the real sync client boundary. */
+const receiveRemote = async (write: (peer: TreecrdtClient) => Promise<Operation>) => {
+  await remote.ops.appendMany(await client.ops.all())
+  await syncClient.ops.appendMany([await write(remote)])
 }
 
 beforeEach(async () => {
@@ -51,11 +71,13 @@ beforeEach(async () => {
   ;({ cleanup } = await initialize({ storage: 'memory' }))
   await vi.runAllTimersAsync()
   client = await vi.mocked(createTreecrdtClient).mock.results.at(-1)!.value
+  remote = await createTreecrdtClient({ storage: { type: 'memory' }, runtime: { type: 'direct' }, docId: client.docId })
 })
 
 afterEach(async () => {
   await waitForThoughtspaceIdle()
   cleanup()
+  await remote.drop()
   vi.restoreAllMocks()
 })
 
@@ -200,7 +222,7 @@ it('confirms unloaded memberships after rename, undo, and redo through the real 
   await expect(db.getThoughtById(edited.id)).resolves.toMatchObject({ value: 'cat' })
 })
 
-it('applies an older completion beneath a newer pending edit', async () => {
+it('publishes a committed membership read beneath a newer pending edit', async () => {
   store.dispatch(importText({ text: '- cat' }))
   await waitForThoughtspaceIdle()
   const thought = contextToThought(store.getState(), ['cat'])!
@@ -209,12 +231,19 @@ it('applies an older completion beneath a newer pending edit', async () => {
   const secondStarted = deferred()
   const secondReleased = deferred()
   const payload = client.local.payload.bind(client.local)
-  vi.spyOn(client.local, 'payload')
-    .mockImplementationOnce(async (...args) => {
+  const getText = client.runner.getText.bind(client.runner)
+  let pauseRead = true
+  vi.spyOn(client.runner, 'getText').mockImplementation(async (sql, params) => {
+    const result = await getText(sql, params)
+    if (pauseRead && sql.includes('FROM (SELECT * FROM em_lexeme_memberships')) {
+      pauseRead = false
       firstStarted.resolve()
       await firstReleased.promise
-      return payload(...args)
-    })
+    }
+    return result
+  })
+  vi.spyOn(client.local, 'payload')
+    .mockImplementationOnce(payload)
     .mockImplementationOnce(async (...args) => {
       secondStarted.resolve()
       await secondReleased.promise
@@ -305,12 +334,25 @@ it('does not publish a previous generation after clearing Redux during a write',
   expect(persisted).toHaveBeenCalledOnce()
 })
 
+it('discards a queued no-op confirmation when Redux is cleared before persistence starts', async () => {
+  store.dispatch(importText({ text: '- cat' }))
+  await waitForThoughtspaceIdle()
+  const thought = contextToThought(store.getState(), ['cat'])!
+
+  store.dispatch(updateThoughts({ thoughtIndexUpdates: { [thought.id]: thought } }))
+  store.dispatch(clear())
+  await waitForThoughtspaceIdle()
+
+  expect(getLexeme(store.getState(), 'cat')).toBeUndefined()
+  expect(store.getState().thoughts.thoughtIndex[thought.id]).toBeUndefined()
+})
+
 it('applies a remote reorder without requiring a payload timestamp change', async () => {
   store.dispatch(importText({ text: '- a\n- b\n- c' }))
   await waitForThoughtspaceIdle()
   const c = contextToThought(store.getState(), ['c'])!
 
-  await client.local.move(remoteReplica, c.id, HOME_TOKEN, { type: 'first' })
+  await receiveRemote(peer => peer.local.move(remoteReplica, c.id, HOME_TOKEN, { type: 'first' }))
   await waitForThoughtspaceIdle()
 
   expect(exportContext(store.getState(), [HOME_TOKEN], 'text/plain')).toBe(`- ${HOME_TOKEN}
@@ -336,8 +378,9 @@ it('persists a queued rename without moving the thought back after a remote move
 
   store.dispatch(editThought(['left', 'cat'], 'dog'))
   await started.promise
-  await client.local.move(remoteReplica, cat.id, right.id, { type: 'first' })
+  const incoming = receiveRemote(peer => peer.local.move(remoteReplica, cat.id, right.id, { type: 'first' }))
   released.resolve()
+  await incoming
   await expect(waitForThoughtspaceIdle()).resolves.toBeUndefined()
 
   expect(exportContext(store.getState(), [HOME_TOKEN], 'text/plain')).toBe(`- ${HOME_TOKEN}
@@ -358,18 +401,22 @@ it('persists a queued move without overwriting a remote rename', async () => {
   const cat = contextToThought(store.getState(), ['left', 'cat'])!
   const started = deferred()
   const released = deferred()
-  const exists = client.tree.exists.bind(client.tree)
-  vi.spyOn(client.tree, 'exists').mockImplementationOnce(async id => {
+  const parent = client.tree.parent.bind(client.tree)
+  vi.spyOn(client.tree, 'parent').mockImplementationOnce(async id => {
     started.resolve()
     await released.promise
-    return exists(id)
+    return parent(id)
   })
 
-  store.dispatch(moveThought({ from: ['left', 'cat'], to: ['right', 'cat'], newRank: 0 }))
-  await started.promise
   const payload = decodeThoughtPayload((await client.tree.getPayload(cat.id))!)
-  await client.local.payload(remoteReplica, cat.id, encodeThoughtPayload({ ...payload, value: 'dog' }))
+  const incoming = receiveRemote(peer =>
+    peer.local.payload(remoteReplica, cat.id, encodeThoughtPayload({ ...payload, value: 'dog' })),
+  )
+  await started.promise
+  // Redux has not received the rename yet; the queued placement must not carry its old value.
+  store.dispatch(moveThought({ from: ['left', 'cat'], to: ['right', 'cat'], newRank: 0 }))
   released.resolve()
+  await incoming
   await waitForThoughtspaceIdle()
 
   expect(exportContext(store.getState(), [HOME_TOKEN], 'text/plain')).toBe(`- ${HOME_TOKEN}
@@ -384,7 +431,7 @@ it('persists a queued move without overwriting a remote rename', async () => {
     - dog`)
 })
 
-it('retries a stale structural read after a newer local move', async () => {
+it('keeps a newer optimistic move visible while a committed structural read is pending', async () => {
   store.dispatch(importText({ text: '- left\n  - cat\n- middle\n- right' }))
   await waitForThoughtspaceIdle()
   const cat = contextToThought(store.getState(), ['left', 'cat'])!
@@ -399,11 +446,12 @@ it('retries a stale structural read after a newer local move', async () => {
     return result
   })
 
-  await client.local.move(remoteReplica, cat.id, middle.id, { type: 'first' })
+  const incoming = receiveRemote(peer => peer.local.move(remoteReplica, cat.id, middle.id, { type: 'first' }))
   await started.promise
   store.dispatch(moveThought({ from: ['left', 'cat'], to: ['right', 'cat'], newRank: 0 }))
-  await waitForTreecrdtWriteBarrier()
+  expect(contextToThought(store.getState(), ['right', 'cat'])?.id).toBe(cat.id)
   released.resolve()
+  await incoming
   await waitForThoughtspaceIdle()
 
   expect(exportContext(store.getState(), [HOME_TOKEN], 'text/plain')).toBe(`- ${HOME_TOKEN}
@@ -424,12 +472,14 @@ it('keeps a failed rename visible without masking a remote move', async () => {
 
   store.dispatch(editThought(['left', 'cat'], 'dog'))
   await expect(waitForTreecrdtWriteBarrier()).rejects.toBe(failure)
-  await client.local.move(remoteReplica, cat.id, right.id, { type: 'first' })
+  await receiveRemote(peer => peer.local.move(remoteReplica, cat.id, right.id, { type: 'first' }))
   const payload = decodeThoughtPayload((await client.tree.getPayload(cat.id))!)
-  await client.local.payload(
-    remoteReplica,
-    cat.id,
-    encodeThoughtPayload({ ...payload, lastUpdated: payload.lastUpdated + 10000 }),
+  await receiveRemote(peer =>
+    peer.local.payload(
+      remoteReplica,
+      cat.id,
+      encodeThoughtPayload({ ...payload, lastUpdated: payload.lastUpdated + 10000 }),
+    ),
   )
   await waitForThoughtspaceIdle()
   // A normal pull must preserve the same pending intent as a materialization refresh.
@@ -454,13 +504,17 @@ it('keeps a failed placement without losing a remote rename or inserted sibling'
   store.dispatch(moveThought({ from: ['left', 'cat'], to: ['right', 'cat'], newRank: 1 }))
   await expect(waitForTreecrdtWriteBarrier()).rejects.toBe(failure)
   const payload = decodeThoughtPayload((await client.tree.getPayload(cat.id))!)
-  await client.local.payload(remoteReplica, cat.id, encodeThoughtPayload({ ...payload, value: 'dog' }))
-  await client.local.insert(
-    remoteReplica,
-    right.id,
-    createId(),
-    { type: 'last' },
-    encodeThoughtPayload({ ...payload, value: 'tail' }),
+  await receiveRemote(peer =>
+    peer.local.payload(remoteReplica, cat.id, encodeThoughtPayload({ ...payload, value: 'dog' })),
+  )
+  await receiveRemote(peer =>
+    peer.local.insert(
+      remoteReplica,
+      right.id,
+      createId(),
+      { type: 'last' },
+      encodeThoughtPayload({ ...payload, value: 'tail' }),
+    ),
   )
   await waitForThoughtspaceIdle()
 
@@ -485,7 +539,7 @@ it('does not project a pending placement into a cycle after a remote move', asyn
 
   store.dispatch(moveThought({ from: ['left', 'cat'], to: ['right', 'cat'], newRank: 0 }))
   await expect(waitForTreecrdtWriteBarrier()).rejects.toBe(failure)
-  await client.local.move(remoteReplica, right.id, cat.id, { type: 'first' })
+  await receiveRemote(peer => peer.local.move(remoteReplica, right.id, cat.id, { type: 'first' }))
   await waitForThoughtspaceIdle()
 
   expect(exportContext(store.getState(), [HOME_TOKEN], 'text/plain')).toBe(`- ${HOME_TOKEN}

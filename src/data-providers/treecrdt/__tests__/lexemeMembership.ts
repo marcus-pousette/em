@@ -2,12 +2,9 @@ import { type TreecrdtClient, createTreecrdtClient } from '@treecrdt/wa-sqlite'
 import type ThoughtId from '../../../@types/ThoughtId'
 import { HOME_TOKEN } from '../../../constants'
 import hashThought from '../../../util/hashThought'
-import mergeUpdates from '../../../util/mergeUpdates'
-import type { ThoughtspaceMaterializationBridge, ThoughtspaceMaterializationSnapshot } from '../../thoughtspace'
 import { encodeThoughtPayload } from '../payload'
-import { waitForMaterializedThoughtsToStore } from '../sync/materializationQueue'
 import createTreecrdtDataProvider from '../thoughtspace'
-import { createTreecrdtLocalWriteOptions, withTreecrdtWriteBarrier } from '../writeBarrier'
+import { waitForTreecrdtWriteBarrier } from '../writeBarrier'
 
 const A = '00000000000000000000000000000401' as ThoughtId
 const B = '00000000000000000000000000000402' as ThoughtId
@@ -19,9 +16,9 @@ let unbind: (() => Promise<void>) | undefined
 const payload = (value: string) => encodeThoughtPayload({ value, created: 1, lastUpdated: 2, updatedBy: 'test' })
 
 /** Binds a provider to the same database, allowing restart tests to preserve all stored data. */
-const bind = async (bridge?: ThoughtspaceMaterializationBridge) => {
+const bind = async () => {
   const provider = createTreecrdtDataProvider()
-  unbind = await provider.bindClient(client, replica, bridge)
+  ;({ unsubscribe: unbind } = await provider.bindClient(client, replica))
   return provider.db
 }
 
@@ -100,7 +97,7 @@ it('repairs an interrupted index update on reopen without checkpointing later wr
 
   await client.local.insert(replica, HOME_TOKEN, B, { type: 'last' }, payload('bird'))
   await expect(db.getLexemeById(hashThought('bird'))).rejects.toBe(failure)
-  await expect(waitForMaterializedThoughtsToStore()).rejects.toBe(failure)
+  await expect(waitForTreecrdtWriteBarrier()).rejects.toBe(failure)
   expect(await client.runner.getText('SELECT head_seq FROM em_lexeme_memberships_meta')).toBe(checkpoint)
   await expect(unbind!()).rejects.toBe(failure)
   unbind = undefined
@@ -109,66 +106,4 @@ it('repairs an interrupted index update on reopen without checkpointing later wr
   expect(await reopened.getLexemeById(hashThought('cat'))).toBeUndefined()
   expect((await reopened.getLexemeById(hashThought('dog')))?.contexts).toEqual([A])
   expect((await reopened.getLexemeById(hashThought('bird')))?.contexts).toEqual([B])
-})
-
-it('does not publish a stale membership read over an intervening optimistic edit', async () => {
-  let snapshot: ThoughtspaceMaterializationSnapshot = { generation: 0, thoughtIndex: {}, lexemeIndex: {} }
-  const published: string[][] = []
-  await bind({
-    getSnapshot: () => snapshot,
-    apply: updates => {
-      snapshot = {
-        generation: snapshot.generation,
-        thoughtIndex: mergeUpdates(snapshot.thoughtIndex, updates.thoughtIndex),
-        lexemeIndex: mergeUpdates(snapshot.lexemeIndex, updates.lexemeIndex),
-      }
-      published.push(Object.keys(snapshot.lexemeIndex))
-    },
-  })
-  await client.local.insert(replica, HOME_TOKEN, A, { type: 'last' }, payload('cat'))
-  await waitForMaterializedThoughtsToStore()
-
-  let markReadStarted!: () => void
-  let releaseRead!: () => void
-  const readStarted = new Promise<void>(resolve => {
-    markReadStarted = resolve
-  })
-  const readReleased = new Promise<void>(resolve => {
-    releaseRead = resolve
-  })
-  const getText = client.runner.getText.bind(client.runner)
-  let pauseNextRead = true
-  vi.spyOn(client.runner, 'getText').mockImplementation(async (sql, params) => {
-    const result = await getText(sql, params)
-    if (pauseNextRead && sql.includes('FROM (SELECT * FROM em_lexeme_memberships')) {
-      pauseNextRead = false
-      markReadStarted()
-      await readReleased
-    }
-    return result
-  })
-
-  const before = snapshot.thoughtIndex[A]
-  const first = { ...before, value: 'dog' }
-  snapshot = { ...snapshot, thoughtIndex: { ...snapshot.thoughtIndex, [A]: first } }
-  await withTreecrdtWriteBarrier(() =>
-    client.local.payload(replica, A, payload('dog'), createTreecrdtLocalWriteOptions()),
-  )
-  await readStarted
-
-  const second = { ...first, value: 'bird' }
-  snapshot = { ...snapshot, thoughtIndex: { ...snapshot.thoughtIndex, [A]: second } }
-  published.length = 0
-  const write = withTreecrdtWriteBarrier(() =>
-    client.local.payload(replica, A, payload('bird'), createTreecrdtLocalWriteOptions()),
-  )
-  releaseRead()
-  await write
-  await waitForMaterializedThoughtsToStore()
-
-  expect(snapshot.thoughtIndex[A].value).toBe('bird')
-  expect(snapshot.lexemeIndex[hashThought('bird')]?.contexts).toEqual([A])
-  expect(snapshot.lexemeIndex[hashThought('dog')]).toBeUndefined()
-  expect(snapshot.lexemeIndex[hashThought('cat')]).toBeUndefined()
-  expect(published.flat()).not.toContain(hashThought('dog'))
 })

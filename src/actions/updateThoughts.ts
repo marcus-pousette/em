@@ -21,6 +21,7 @@ import keyValueBy from '../util/keyValueBy'
 import mergeUpdates from '../util/mergeUpdates'
 import projectLexemes from '../util/projectLexemes'
 import reducerFlow from '../util/reducerFlow'
+import acknowledgeThoughtWrites from './acknowledgeThoughtWrites'
 
 export type UpdateThoughtsOptions = Omit<PushBatch, 'lexemeIndexUpdates'> & {
   lexemeIndexUpdates?: PushBatch['lexemeIndexUpdates']
@@ -38,16 +39,27 @@ export type UpdateThoughtsOptions = Omit<PushBatch, 'lexemeIndexUpdates'> & {
    * This should only be used when the updates are coming from another device. For local updates, updateThoughts is typically called within a higher level reducer (e.g. moveThought) which handles all cursor updates. There would be false positives during local updates since the cursor is updated after updateThoughts.
    */
   repairCursor?: boolean
-  /** A materialization refresh whose reads were checked against concurrent writes and Redux edits. */
+  /** A committed refresh published within the provider's storage sequence. */
   materialized?: boolean
+  /** Clears only matching pending edits in the same update that publishes their committed state. */
+  confirmedWriteIds?: string[]
 }
 
 /** Applies outstanding field edits to confirmed state, rebuilding only their affected parent lists. */
-const applyPendingThoughtWrites = (state: State, confirmed: Index<Thought>): Index<Thought> => {
+const applyPendingThoughtWrites = (
+  state: State,
+  confirmed: Index<Thought>,
+  updates: Index<Thought | null>,
+): Index<Thought> => {
   const pending = Object.entries(state.pendingThoughtWrites)
   if (pending.length === 0) return confirmed
   const thoughts = { ...confirmed }
-  const parents = new Set<ThoughtId>()
+  // A pull can refresh an old parent without refreshing its optimistically moved child.
+  const parents = new Set(
+    Object.values(updates).flatMap(thought =>
+      thought && Object.values(thought.childrenMap).some(id => id in state.pendingThoughtWrites) ? [thought.id] : [],
+    ),
+  )
   const placements = new Set<string>()
 
   pending.forEach(([id, { patch }]) => {
@@ -57,8 +69,14 @@ const applyPendingThoughtWrites = (state: State, confirmed: Index<Thought>): Ind
       delete thoughts[id]
       return
     }
-    // Parent membership is derived below, not replaced by an old optimistic childrenMap.
-    const { childrenMap: _childrenMap, ...fields } = patch
+    // Neither derived membership nor UI-only flags belong to a pending persistence patch.
+    const {
+      childrenMap: _childrenMap,
+      pending: _pending,
+      generating: _generating,
+      splitSource: _splitSource,
+      ...fields
+    } = patch
     if (previous) thoughts[id] = { ...previous, ...fields }
     if (patch.parentId !== undefined) placements.add(id)
     if (thoughts[id]) parents.add(thoughts[id].parentId)
@@ -169,15 +187,17 @@ const updateThoughts = (
     overwritePending,
     repairCursor,
     materialized,
+    confirmedWriteIds,
   }: UpdateThoughtsOptions,
 ) => {
+  if (confirmedWriteIds) state = acknowledgeThoughtWrites(state, { writeIds: confirmedWriteIds })
   if (Object.keys(thoughtIndexUpdates).length === 0 && Object.keys(lexemeIndexUpdates).length === 0) return state
 
   const thoughtIndexOld = { ...state.thoughts.thoughtIndex }
   const lexemeIndexOld = { ...state.thoughts.lexemeIndex }
 
   // Ordinary pulls can read intermediate local writes with the same timestamp (#3948).
-  // Keep the <= guard for those unversioned reads. Materialization uses explicit read-version checks
+  // Keep the <= guard for those unversioned reads. Materialization owns the storage queue
   // instead: an order-only change need not advance the payload timestamp. Missing/pending thoughts,
   // deletions, and intentional cache overwrites still pass through.
   const thoughtIndexUpdatesFresh =
@@ -196,7 +216,9 @@ const updateThoughts = (
   // TODO: Can we use { overwritePending: !local } and get rid of the overwritePending option to updateThoughts? i.e. Are there any false positives when local is false?
   const mergedThoughts = mergeUpdates(thoughtIndexOld, thoughtIndexUpdatesFresh, { overwritePending })
   const thoughtIndex =
-    !local && !remote && !overwritePending ? applyPendingThoughtWrites(state, mergedThoughts) : mergedThoughts
+    !local && !remote && !overwritePending
+      ? applyPendingThoughtWrites(state, mergedThoughts, thoughtIndexUpdatesFresh)
+      : mergedThoughts
   const lexemeIndex = projectLexemes(
     mergeUpdates(lexemeIndexOld, lexemeIndexUpdates, { overwritePending }),
     local || remote

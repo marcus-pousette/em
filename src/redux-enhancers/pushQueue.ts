@@ -173,10 +173,7 @@ const pushQueue: StoreEnhancer<any> =
               local: batch.local,
             })),
           )
-          .then(lexemeIndex => {
-            if (store.getState().thoughtspaceGeneration === writeGeneration) {
-              store.dispatch({ type: 'acknowledgeThoughtWrites', writeIds, lexemeIndex } as unknown as A)
-            }
+          .then(() => {
             dbQueue?.forEach(batch => batch.idbSynced?.())
             debugLog.log('pushSynced', { thoughtCount: thoughtUpdates.length })
           })

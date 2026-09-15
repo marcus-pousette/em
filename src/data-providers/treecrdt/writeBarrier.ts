@@ -2,7 +2,6 @@ import type { LocalWriteOptions, MaterializationEvent } from '@treecrdt/interfac
 
 let pendingTreecrdtWrite = Promise.resolve()
 let pendingTreecrdtWriteError: unknown = null
-let pendingTreecrdtWriteVersion = 0
 let localWriteCounter = 0
 
 const localWriteSourceId =
@@ -13,11 +12,10 @@ const localWriteSourceId =
 const localWriteIdPrefix = `em-local:${localWriteSourceId}:`
 
 /**
- * Queues em -> TreeCRDT persistence work and exposes an idle barrier for materialization refreshes.
- * This is a local ordering guard, not a CRDT requirement; it keeps app-state refreshes from racing local persistence.
+ * Serializes provider reads, local/incoming writes, and committed publication.
+ * Internal client/index calls must not re-enter this queue or wait for its idle barrier.
  */
 export function withTreecrdtWriteBarrier<T>(work: () => Promise<T>): Promise<T> {
-  pendingTreecrdtWriteVersion += 1
   const run = pendingTreecrdtWrite.then(work, work)
   pendingTreecrdtWrite = run.then(
     () => undefined,
@@ -27,9 +25,6 @@ export function withTreecrdtWriteBarrier<T>(work: () => Promise<T>): Promise<T> 
   )
   return run
 }
-
-/** Monotonically increases whenever TreeCRDT persistence work is queued. */
-export const getTreecrdtWriteBarrierVersion = (): number => pendingTreecrdtWriteVersion
 
 /** Waits until TreeCRDT persistence is idle, including work queued while waiting. */
 export async function waitForTreecrdtWriteBarrier(): Promise<void> {
@@ -52,6 +47,10 @@ export function createTreecrdtLocalWriteOptions(writeId?: string): LocalWriteOpt
   return { writeId: `${localWriteIdPrefix}${writeId ?? localWriteCounter}` }
 }
 
+/** Recognizes obsolete Redux write IDs before they are namespaced for the TreeCRDT client. */
+export const isStaleThoughtWrite = (id: string, generation: number): boolean =>
+  id.startsWith('generation:') && !id.startsWith(`generation:${generation}:`)
+
 /** True when every change belongs to this tab's writes from a cleared Redux generation. */
 export const isStaleTreecrdtMaterialization = (event: MaterializationEvent, generation: number): boolean =>
   event.changes.length > 0 &&
@@ -59,15 +58,13 @@ export const isStaleTreecrdtMaterialization = (event: MaterializationEvent, gene
     change.source?.writeIds?.length
       ? change.source.writeIds.every(
           id =>
-            id.startsWith(`${localWriteIdPrefix}generation:`) &&
-            !id.startsWith(`${localWriteIdPrefix}generation:${generation}:`),
+            id.startsWith(localWriteIdPrefix) && isStaleThoughtWrite(id.slice(localWriteIdPrefix.length), generation),
         )
       : false,
   )
 
 export default {
   createTreecrdtLocalWriteOptions,
-  getTreecrdtWriteBarrierVersion,
   isStaleTreecrdtMaterialization,
   waitForTreecrdtWriteBarrier,
   withTreecrdtWriteBarrier,

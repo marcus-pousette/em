@@ -21,11 +21,11 @@ Thoughts that are known to exist but haven't been loaded yet are flagged with `p
 
 ### Optimistic edits and write confirmation
 
-Redux holds the optimistic view and `pendingThoughtWrites`: outstanding field patches, optional sibling placements, and the latest write ID per thought. This is separate from `Thought.pending`, which means not yet loaded. The provider returns complete affected memberships after persistence, including no-ops; [`acknowledgeThoughtWrites`](../src/actions/acknowledgeThoughtWrites.ts) applies them beneath newer pending edits and clears only matching writes. Failed current writes retain their edit and error until superseded or the store is cleared; this is in-memory tracking, not a durable retry queue or a new error indicator. Later edits do not automatically retry previously failed fields. A failed confirmation does not imply storage rolled back.
+Redux holds the optimistic view and `pendingThoughtWrites`: outstanding field patches, optional sibling placements, and the latest write ID per thought. This is separate from `Thought.pending`, which means not yet loaded. The provider publishes committed thoughts, complete affected memberships, and matching write IDs in one synchronous Redux update, including no-op confirmations. [`acknowledgeThoughtWrites`](../src/actions/acknowledgeThoughtWrites.ts) clears those writes before remaining pending edits are projected. Failed current writes retain their edit and error until superseded or the store is cleared; this is in-memory tracking, not a durable retry queue or a new error indicator. Later edits do not automatically retry previously failed fields. A failed confirmation does not imply storage rolled back.
 
 [`projectLexemes`](../src/util/projectLexemes.ts) derives optimistic memberships from thought changes for creation, rename, deletion, merging, and imports. Unloaded occurrences become visible when confirmation arrives; an optimistic count is not necessarily complete. Pending thoughts and their ancestors are protected from cache eviction. Undo/redo excludes write tracking from history and persists restored thoughts normally. Clearing Redux advances `thoughtspaceGeneration`, invalidating outstanding confirmations and local materializations. There is no second snapshot store; the write barrier and pull guards below remain necessary.
 
-Materialization refreshes and ordinary pulls apply pending field patches over the incoming thoughts. A pending rename therefore does not hide a remote move, and a pending move does not replace a remote rename. Parent membership is rebuilt from pending placements, not copied from stale `childrenMap` values. A placement that would create a cycle is not projected.
+Materialization refreshes and ordinary pulls apply pending persisted fields over the incoming thoughts, preserving current UI-only flags. A pending rename therefore does not hide a remote move, and a pending move does not replace a remote rename. Parent membership is rebuilt from pending placements, including when a pull refreshes only an old parent. A placement that would create a cycle is not projected. This projection does not change TreeCRDT's conflict resolution for genuinely concurrent payload writes.
 
 ## Local persistence (TreeCRDT + SQLite)
 
@@ -97,7 +97,7 @@ The function returns the operations it minted and the affected old/new lexeme ke
 
 Payloads remain whole-record TreeCRDT values: merging an app patch with a stored read does not introduce per-field CRDT conflict resolution.
 
-`DataProvider.updateThoughts` is the public persistence entry point for push-queue batches. It returns `{ operations, lexemeIndex }`, where `lexemeIndex` contains complete old/new memberships from storage, with `null` for removed lexemes. Reads and writes that arrive before the client is bound wait on a readiness promise; a failed initialization or a `drop` rejects those waiters so the next initialization starts clean.
+`DataProvider.updateThoughts` persists one batch and returns `{ operations, lexemeIndex }`, with complete old/new memberships and `null` for removed lexemes. The runtime can persist several push-queue batches in one storage job. Reads and writes that arrive before binding wait on a readiness promise; failed initialization or `drop` rejects those waiters so the next initialization starts clean.
 
 #### Order and placement
 
@@ -114,7 +114,9 @@ The rank fallback remains for direct provider inserts and placements whose ancho
 
 ### Write barrier
 
-[`writeBarrier.ts`](../src/data-providers/treecrdt/writeBarrier.ts) serializes em → TreeCRDT persistence and exposes an idle barrier. It is a local ordering guard, not a CRDT requirement: it keeps app-state refreshes from racing local persistence, so a materialization refresh can't reapply stale rows over newer optimistic state.
+[`writeBarrier.ts`](../src/data-providers/treecrdt/writeBarrier.ts) serializes provider reads, local batches, incoming sync operations, and committed publication. Each job finishes derived indexes and Redux publication before the next starts. Internal client/index calls never re-enter the queue or await its idle barrier. This is local ordering, not an atomic database transaction or a CRDT requirement. Redux optimistic edits remain synchronous.
+
+The sync client uses queued operations, op-reference reads, metadata reads, and SQL calls bound to its originating client. Runtime teardown closes admission and drains accepted work before releasing that client. Uncoordinated writes through a raw client are not supported while the provider owns it; the app's single-tab lock enforces exclusive ownership across tabs.
 
 It also namespaces local write IDs by page load. Redux batches include their thoughtspace generation, allowing delayed materializations from before a store reset to be discarded without suppressing another tab's changes. Bootstrap and direct provider writes receive counter-based IDs.
 
@@ -122,13 +124,12 @@ It also namespaces local write IDs by page load. Redux batches include their tho
 
 `client.onMaterialized` fires after operations are materialized into SQLite — for remote ops arriving over sync as well as for local writes. Every event updates the membership index from current node state. The previous hash is looked up by thought ID, so rename/delete also work when the old thought was never loaded into Redux. Indexing runs even without a UI bridge.
 
-[`applyMaterializedThoughtsToStore`](../src/data-providers/treecrdt/sync/applyMaterializedThoughtsToStore.ts) coalesces events queued through [`materializationQueue.ts`](../src/data-providers/treecrdt/sync/materializationQueue.ts). The task awaits membership indexing even without a bridge. With a bridge, it:
+[`applyMaterializedThoughtsToStore`](../src/data-providers/treecrdt/sync/applyMaterializedThoughtsToStore.ts) drains the owning job's events and finishes membership and attribute indexes even without a bridge. With a bridge, it:
 
-1. Waits for the write barrier.
-2. Discards obsolete generations, refreshes attributes, and loads affected thoughts and sibling order through [`refreshThoughtsFromMaterializationChanges`](../src/data-providers/treecrdt/sync/materializationThoughtUpdates.ts). Local and remote events follow the same path. Deletions are checked against current storage, so a delayed delete event cannot hide a restored thought. The internal global root is not published to Redux.
-3. Loads complete lexemes for the affected old/new hashes. If an optimistic edit or materialization arrived during the read, detected from the Redux snapshot and write/materialization queue counters, retries before applying through the bridge. Unchanged lexemes are not republished.
+1. Discards obsolete generations and loads affected thoughts and sibling order through [`refreshThoughtsFromMaterializationChanges`](../src/data-providers/treecrdt/sync/materializationThoughtUpdates.ts). Local and remote events follow the same path. Deletions are checked against current storage; the internal global root is not published to Redux.
+2. Reads complete affected memberships, preserves current UI flags, and synchronously publishes them with matching write confirmations. The storage queue prevents intervening writes, so no version-counter retry loop is needed. A Redux reset during the read still discards its publication.
 
-The bridge is supplied by [`initialize.ts`](../src/initialize.ts): `getSnapshot` reads the Redux indexes and generation; `apply` dispatches `updateThoughts` with `local: false, remote: false, repairCursor: true, materialized: true`. That validated path bypasses the payload-timestamp guard and reapplies outstanding field intent. UI-only `pending`, `generating`, and `splitSource` flags survive the refresh. Ordinary pulls retain their timestamp guard.
+[`createThoughtspaceMaterializationBridge`](../src/data-providers/createThoughtspaceMaterializationBridge.ts) connects app initialization and headless store tests to the same Redux projection. Its snapshot reads existing Redux state, not a second store; publication bypasses the payload-timestamp guard and overlays remaining field intent. Ordinary pulls retain their timestamp guard. If a provider read itself triggers recovery, its job finishes the derived indexes and rereads once before returning a coherent read model.
 
 ### Memory management
 
@@ -141,7 +142,7 @@ Deleting a thought is not a separate provider call: it is a `null` entry in `tho
 `ThoughtspaceRuntime` ([`thoughtspace.ts`](../src/data-providers/thoughtspace.ts), implemented in [`treecrdt/runtime.ts`](../src/data-providers/treecrdt/runtime.ts)) exposes `acquireAccess`, `init`, `drop`, `waitForIdle`, and `persistPushQueueBatches`.
 
 - **`init`** awaits `clientIdReady`, loads the permissions store, creates the client, binds it to the data provider (which seeds storage and subscribes to materialization), and finally tries to start WebSocket sync. It resolves to `{ clientId, storage }`, where `storage` is the storage the client actually opened rather than the one requested. `init` and `drop` are serialized on a single lifecycle tail, and adjacent `init` calls are coalesced, so teardown can never interleave with startup.
-- **`waitForIdle`** alternates between the write barrier and the materialization queue until neither version counter changes, then resolves; it rejects after `TREECRDT_IDLE_TIMEOUT = 30000` ms. Puppeteer tests reach it through the [`waitForThoughtspaceIdle`](../src/e2e/puppeteer/helpers/waitForThoughtspaceIdle.ts) helper, which calls `em.testHelpers.waitForThoughtspaceRuntimeIdle`.
+- **`waitForIdle`** waits for active initialization, then drains the shared storage queue, including work enqueued while waiting, and reports failures; it rejects after `TREECRDT_IDLE_TIMEOUT = 30000` ms. Waiting for initialization includes edits accepted before storage opens. Puppeteer tests reach it through the [`waitForThoughtspaceIdle`](../src/e2e/puppeteer/helpers/waitForThoughtspaceIdle.ts) helper, which calls `em.testHelpers.waitForThoughtspaceRuntimeIdle`.
 
 ## Remote sync (opt-in)
 
@@ -158,7 +159,7 @@ Failures are non-fatal by design: a failed start logs a warning and em keeps run
 
 [`redux-enhancers/pushQueue.ts`](../src/redux-enhancers/pushQueue.ts) is a Redux store enhancer that runs after every reducer. It drains `state.pushQueue` (a list of `PushBatch` objects pushed there by [`updateThoughts`](../src/actions/updateThoughts.ts) and friends) and partitions it into:
 
-- **`dbQueue`** — batches with `local || remote` set. The enhancer converts full Redux records into changed fields and sibling placements. `thoughtspaceRuntime.persistPushQueueBatches` applies them sequentially through the write barrier and provider. Returned memberships confirm matching pending writes; then `idbSynced` callbacks run. Confirmations from before a store reset are discarded, but callbacks still settle.
+- **`dbQueue`** — batches with `local || remote` set. The enhancer converts full Redux records into changed fields and sibling placements. `thoughtspaceRuntime.persistPushQueueBatches` applies them in one provider job and resolves after publication; then `idbSynced` callbacks run. Confirmations from before a store reset are discarded, but callbacks still settle.
 - **`freeQueue`** — state-only batches whose `null` thought/lexeme entries indicate they should be released from the in-memory cache. Calls `db.freeThought` / `db.freeLexeme` (no-ops for TreeCRDT; the Redux-side release is what matters).
 
 The enhancer also caches a small set of critical settings (`CACHED_SETTINGS` in [`constants.ts`](../src/constants.ts)) into `localStorage` so that things like the Tutorial setting are available during the first paint before the thoughtspace hydrates. The corresponding read path is [`selectors/getSetting.ts`](../src/selectors/getSetting.ts).
@@ -169,11 +170,11 @@ Once Redux dispatches a thought update, the data flow is therefore:
 
 ```
 reducer → state.pushQueue → pushQueue enhancer
-      → thoughtspaceRuntime.persistPushQueueBatches   (write barrier)
-      → DataProvider.updateThoughts
+      → thoughtspaceRuntime.persistPushQueueBatches
+      → provider storage job
       → TreeCRDT local ops + derived table writes
-      → Operation[] forwarded to WebSocket sync (if connected)
-      → complete affected memberships applied beneath pending edits in Redux
+      → committed thoughts + memberships + matching confirmations published beneath pending Redux edits
+      → next storage job may start; local Operation[] forwarded to WebSocket sync if connected
       → idbSynced callback is invoked
 ```
 

@@ -3,88 +3,67 @@ import type { TreecrdtClient } from '@treecrdt/wa-sqlite'
 import _ from 'lodash'
 import type Index from '../../../@types/IndexType'
 import type Thought from '../../../@types/Thought'
+import type ThoughtUpdates from '../../../@types/ThoughtUpdates'
 import type { ThoughtspaceMaterializationBridge } from '../../thoughtspace'
 import { refreshAttributeChildrenFromChanges } from '../attributeChildren'
-import {
-  getTreecrdtWriteBarrierVersion,
-  isStaleTreecrdtMaterialization,
-  waitForTreecrdtWriteBarrier,
-} from '../writeBarrier'
-import { enqueueMaterializedThoughtsToStoreWork, getMaterializedThoughtsToStoreVersion } from './materializationQueue'
+import { isStaleTreecrdtMaterialization } from '../writeBarrier'
 import { type MaterializationStore, refreshThoughtsFromMaterializationChanges } from './materializationThoughtUpdates'
 
 /** Dependencies captured when a client registers its materialization listener. */
-type MaterializationContext = Readonly<{
+export type MaterializationContext = Readonly<{
   bridge?: ThoughtspaceMaterializationBridge
   client: TreecrdtClient
   db: MaterializationStore
   pending: { event: MaterializationEvent; keys: Promise<string[]>; generation: number | undefined }[]
 }>
 
-/** Serializes UI refreshes without putting index persistence behind the local-write barrier. */
-const applyMaterializedThoughtsToStore = (
-  event: MaterializationEvent,
+/** Publishes committed storage beneath current pending edits while the provider still owns the queue. */
+const applyMaterializedThoughtsToStore = async (
   { bridge, client, db, pending }: MaterializationContext,
-  changedKeys: Promise<string[]>,
+  confirmation?: { generation: number | undefined; writeIds: string[]; lexemeIndex: ThoughtUpdates['lexemeIndex'] },
 ): Promise<void> => {
-  pending.push({ event, keys: changedKeys, generation: bridge?.getSnapshot().generation })
-  return enqueueMaterializedThoughtsToStoreWork(async () => {
-    if (pending.length === 0) return
-    let events: MaterializationContext['pending'] = []
+  if (pending.length === 0 && !confirmation) return
+  const generation = bridge?.getSnapshot().generation
+  const indexed = await Promise.all(pending.splice(0).map(async entry => ({ ...entry, keys: await entry.keys })))
+  // Derived storage indexes must also advance without a UI bridge or for an obsolete Redux generation.
+  await refreshAttributeChildrenFromChanges(
+    client,
+    indexed.flatMap(entry => entry.event.changes),
+  )
+  if (!bridge || generation === undefined) return
+  const events = indexed.filter(
+    entry => entry.generation === generation && !isStaleTreecrdtMaterialization(entry.event, generation),
+  )
+  const confirmed = confirmation?.generation === generation ? confirmation : undefined
+  if (events.length === 0 && !confirmed) return
+  const changes = events.flatMap(entry => entry.event.changes)
+  const keys = [...new Set(events.flatMap(entry => entry.keys))]
+  const { deletedIds, thoughts } = await refreshThoughtsFromMaterializationChanges(changes, db)
+  const values = await db.getLexemesByIds(keys)
 
-    // A later optimistic edit or materialization invalidates an asynchronous read. Retry from current storage.
-    while (true) {
-      await waitForTreecrdtWriteBarrier()
-      events.push(...pending.splice(0))
-      // Index persistence is independent of UI publication, including discarded generations.
-      await Promise.all(events.map(entry => entry.keys))
-      if (!bridge) return
-      const snapshot = bridge.getSnapshot()
-      events = events.filter(
-        entry =>
-          entry.generation === snapshot.generation && !isStaleTreecrdtMaterialization(entry.event, snapshot.generation),
-      )
-      if (events.length === 0) return
-      const writeVersion = getTreecrdtWriteBarrierVersion()
-      const materializationVersion = getMaterializedThoughtsToStoreVersion()
-      const changes = events.flatMap(entry => entry.event.changes)
-      const keys = [...new Set((await Promise.all(events.map(entry => entry.keys))).flat())]
-      await refreshAttributeChildrenFromChanges(client, changes)
-      const thoughtIndexUpdates: Index<Thought | null> = {}
-      const { deletedIds, thoughts } = await refreshThoughtsFromMaterializationChanges(changes, db)
-      for (const id of deletedIds) thoughtIndexUpdates[id] = null
-      for (const latest of thoughts) {
-        const previous = snapshot.thoughtIndex[latest.id]
-        const pending = previous?.pending || snapshot.thoughtIndex[latest.parentId]?.pending
-        thoughtIndexUpdates[latest.id] = {
-          ...latest,
-          ...(pending ? { pending } : null),
-          ...(previous?.generating !== undefined ? { generating: previous.generating } : null),
-          ...(previous?.splitSource !== undefined ? { splitSource: previous.splitSource } : null),
-        }
-      }
-      const values = await db.getLexemesByIds(keys)
-      const current = bridge.getSnapshot()
-      if (
-        snapshot.lexemeIndex !== current.lexemeIndex ||
-        snapshot.thoughtIndex !== current.thoughtIndex ||
-        writeVersion !== getTreecrdtWriteBarrierVersion() ||
-        materializationVersion !== getMaterializedThoughtsToStoreVersion()
-      )
-        continue
-
-      const lexemeIndexUpdates = Object.fromEntries(
-        keys.flatMap((key, i) => (_.isEqual(values[i], snapshot.lexemeIndex[key]) ? [] : [[key, values[i] ?? null]])),
-      )
-      if (Object.keys(lexemeIndexUpdates).length > 0 || Object.keys(thoughtIndexUpdates).length > 0) {
-        await bridge.apply({
-          thoughtIndex: thoughtIndexUpdates,
-          lexemeIndex: lexemeIndexUpdates,
-        })
-      }
-      return
+  // Storage cannot change during these reads. Redux can: preserve its latest UI flags and pending intent.
+  const current = bridge.getSnapshot()
+  if (current.generation !== generation) return
+  const thoughtIndex: Index<Thought | null> = Object.fromEntries(deletedIds.map(id => [id, null]))
+  for (const latest of thoughts) {
+    const previous = current.thoughtIndex[latest.id]
+    const pending = previous?.pending || current.thoughtIndex[latest.parentId]?.pending
+    thoughtIndex[latest.id] = {
+      ...latest,
+      ...(pending ? { pending } : null),
+      ...(previous?.generating !== undefined ? { generating: previous.generating } : null),
+      ...(previous?.splitSource !== undefined ? { splitSource: previous.splitSource } : null),
     }
-  })
+  }
+  const lexemeIndex = {
+    ...confirmed?.lexemeIndex,
+    ...Object.fromEntries(
+      keys.flatMap((key, i) => (_.isEqual(values[i], current.lexemeIndex[key]) ? [] : [[key, values[i] ?? null]])),
+    ),
+  }
+  if (confirmed || Object.keys(lexemeIndex).length > 0 || Object.keys(thoughtIndex).length > 0) {
+    bridge.apply({ thoughtIndex, lexemeIndex, writeIds: confirmed?.writeIds })
+  }
 }
 
 export default applyMaterializedThoughtsToStore
