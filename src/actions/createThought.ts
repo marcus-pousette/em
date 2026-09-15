@@ -1,6 +1,5 @@
 import _ from 'lodash'
 import Index from '../@types/IndexType'
-import Lexeme from '../@types/Lexeme'
 import Path from '../@types/Path'
 import State from '../@types/State'
 import Thought from '../@types/Thought'
@@ -8,12 +7,10 @@ import ThoughtId from '../@types/ThoughtId'
 import Thunk from '../@types/Thunk'
 import updateThoughts from '../actions/updateThoughts'
 import { clientId } from '../data-providers/thoughtspaceSession'
-import getLexeme from '../selectors/getLexeme'
 import getThoughtById from '../selectors/getThoughtById'
 import { registerActionMetadata } from '../util/actionMetadata.registry'
 import { childrenMapKey } from '../util/createChildrenMap'
 import createId from '../util/createId'
-import hashThought from '../util/hashThought'
 import head from '../util/head'
 import keyValueBy from '../util/keyValueBy'
 import timestamp from '../util/timestamp'
@@ -34,17 +31,6 @@ interface Payload {
  */
 const createThought = (state: State, { path, value, rank, id, idbSynced, children, splitSource }: Payload) => {
   id = id || createId()
-  const lexemeOld = getLexeme(state, value)
-
-  // create Lexeme if it does not exist
-  const lexemeNew: Lexeme = {
-    ...(lexemeOld || {
-      created: timestamp(),
-      lastUpdated: timestamp(),
-      updatedBy: clientId,
-    }),
-    contexts: [...(lexemeOld?.contexts || []), ...(path.length > 0 ? [id] : [])],
-  }
 
   const parentId = head(path)
   const parent = getThoughtById(state, parentId)
@@ -98,11 +84,7 @@ const createThought = (state: State, { path, value, rank, id, idbSynced, childre
     updatedBy: clientId,
   }
 
-  const lexemeIndexUpdates = {
-    [hashThought(value)]: lexemeNew,
-  }
-
-  return updateThoughts(state, { lexemeIndexUpdates, thoughtIndexUpdates, idbSynced })
+  return updateThoughts(state, { thoughtIndexUpdates, idbSynced })
 }
 
 /** Action-creator for createThought. */
