@@ -73,6 +73,8 @@ const waitForTestReplicationDelay = async (): Promise<void> => {
 
 /** Fetches a thought by ID from the given TreeCRDT client. */
 const getThoughtByIdFromClient = async (client: TreecrdtClient, id: ThoughtId): Promise<Thought | undefined> => {
+  // TreeCRDT retains deleted payloads; EM reads expose only live thoughts.
+  if (!(await client.tree.exists(id))) return undefined
   const payloadBytes = await client.tree.getPayload(id)
   if (payloadBytes === null) return undefined
 
@@ -105,9 +107,8 @@ const getThoughtByIdFromClient = async (client: TreecrdtClient, id: ThoughtId): 
 const treeParentId = (id: ThoughtId): ThoughtId => (id === ROOT_PARENT_ID ? GLOBAL_ROOT_TOKEN : id)
 
 /**
- * Derives TreeCRDT relative placement from em's numeric rank payload.
- * This is the compatibility bridge while the app still treats rank as canonical display order.
- * TODO: Remove when create/import/newThought paths pass explicit placement and selectors read provider-backed order.
+ * Compatibility fallback for direct provider inserts and placements whose sibling anchor disappeared.
+ * Redux writes capture explicit placement before storage normalizes display ranks.
  */
 const getRankPlacement = async (
   client: TreecrdtClient,
@@ -156,33 +157,35 @@ const getTreecrdtPlacement = async (
 /** Applies thought updates and collects the old/new membership keys using the same storage reads. */
 const updateThoughtsForClient = async (
   { client, replicaId }: TreecrdtClientIdentity,
-  { thoughtIndexUpdates, movePlacements }: Parameters<DataProvider['updateThoughts']>[0],
+  { thoughtIndexUpdates, movePlacements, writeId }: Parameters<DataProvider['updateThoughts']>[0],
 ): Promise<{ operations: readonly Operation[]; lexemeKeys: string[] }> => {
   const ops: Operation[] = []
+  const writeOptions = createTreecrdtLocalWriteOptions(writeId)
   const lexemeKeys = new Set<string>()
 
-  const updates: Index<Thought> = {}
   const deletes: ThoughtId[] = []
 
-  for (const [id, thought] of Object.entries(thoughtIndexUpdates)) {
+  for (const [id, patch] of Object.entries(thoughtIndexUpdates)) {
     const thoughtId = id as ThoughtId
-    if (thought === null) {
+    if (patch === null) {
       deletes.push(thoughtId)
-    } else {
-      updates[thoughtId] = thought
-      lexemeKeys.add(hashThought(thought.value))
+      continue
     }
-  }
-
-  for (const id of deletes) {
-    const payload = await client.tree.getPayload(id)
-    if (payload) lexemeKeys.add(hashThought(decodeThoughtPayload(payload).value))
-    ops.push(await client.local.delete(replicaId, id, createTreecrdtLocalWriteOptions()))
-    await deleteAttributeChild(client, id)
-  }
-
-  for (const [id, thought] of Object.entries(updates)) {
-    const thoughtId = id as ThoughtId
+    if (patch.value !== undefined) lexemeKeys.add(hashThought(patch.value))
+    const exists = await client.tree.exists(thoughtId)
+    const existing = exists ? await getThoughtByIdFromClient(client, thoughtId) : undefined
+    if (
+      !existing &&
+      (patch.value === undefined ||
+        patch.parentId === undefined ||
+        patch.rank === undefined ||
+        patch.created === undefined ||
+        patch.lastUpdated === undefined ||
+        patch.updatedBy === undefined)
+    ) {
+      throw new Error(`Cannot apply an edit to missing thought ${thoughtId}.`)
+    }
+    const thought = { ...existing, ...patch, id: thoughtId } as Thought
     const payloadBytes = encodeThoughtPayload({
       value: thought.value,
       created: thought.created,
@@ -191,26 +194,15 @@ const updateThoughtsForClient = async (
       ...(thought.archived !== undefined && { archived: thought.archived }),
     })
 
-    const exists = await client.tree.exists(thoughtId)
     const parentId = treeParentId(thought.parentId)
 
     if (!exists) {
       const placement = await getTreecrdtPlacement(client, thoughtId, thought, movePlacements)
-      ops.push(
-        await client.local.insert(
-          replicaId,
-          parentId,
-          thoughtId,
-          placement,
-          payloadBytes,
-          createTreecrdtLocalWriteOptions(),
-        ),
-      )
+      ops.push(await client.local.insert(replicaId, parentId, thoughtId, placement, payloadBytes, writeOptions))
       if (isAttribute(thought.value)) {
         await upsertAttributeChild(client, parentId, thoughtId, thought.value)
       }
     } else {
-      const existing = await getThoughtByIdFromClient(client, thoughtId)
       if (!existing) continue
       lexemeKeys.add(hashThought(existing.value))
 
@@ -221,7 +213,7 @@ const updateThoughtsForClient = async (
         const placement = await getTreecrdtPlacement(client, thoughtId, thought, movePlacements, {
           requireExplicit: true,
         })
-        ops.push(await client.local.move(replicaId, thoughtId, parentId, placement, createTreecrdtLocalWriteOptions()))
+        ops.push(await client.local.move(replicaId, thoughtId, parentId, placement, writeOptions))
       }
 
       const payloadChanged =
@@ -232,7 +224,7 @@ const updateThoughtsForClient = async (
         existing.archived !== thought.archived
 
       if (payloadChanged) {
-        ops.push(await client.local.payload(replicaId, thoughtId, payloadBytes, createTreecrdtLocalWriteOptions()))
+        ops.push(await client.local.payload(replicaId, thoughtId, payloadBytes, writeOptions))
       }
 
       if (parentChanged || valueChanged) {
@@ -243,6 +235,14 @@ const updateThoughtsForClient = async (
         }
       }
     }
+  }
+
+  // Move surviving children first: a later move can revive a defensively deleted ancestor.
+  for (const id of deletes) {
+    const payload = await client.tree.getPayload(id)
+    if (payload) lexemeKeys.add(hashThought(decodeThoughtPayload(payload).value))
+    ops.push(await client.local.delete(replicaId, id, writeOptions))
+    await deleteAttributeChild(client, id)
   }
 
   return { operations: ops, lexemeKeys: [...lexemeKeys] }
@@ -385,7 +385,7 @@ const createTreecrdtDataProvider = () => {
 
     const lexemes = await createLexemeIndex(client)
     const clientDb = createClientDataProvider({ client, replicaId }, lexemes)
-    const materializationContext = { bridge: materialization, client, db: clientDb }
+    const materializationContext = { bridge: materialization, client, db: clientDb, pending: [] }
 
     const unsubscribeMaterialized = client.onMaterialized(event => {
       const keys = lexemes.applyChanges(event)

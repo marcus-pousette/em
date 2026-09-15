@@ -112,12 +112,13 @@ it('repairs an interrupted index update on reopen without checkpointing later wr
 })
 
 it('does not publish a stale membership read over an intervening optimistic edit', async () => {
-  let snapshot: ThoughtspaceMaterializationSnapshot = { thoughtIndex: {}, lexemeIndex: {} }
+  let snapshot: ThoughtspaceMaterializationSnapshot = { generation: 0, thoughtIndex: {}, lexemeIndex: {} }
   const published: string[][] = []
   await bind({
     getSnapshot: () => snapshot,
     apply: updates => {
       snapshot = {
+        generation: snapshot.generation,
         thoughtIndex: mergeUpdates(snapshot.thoughtIndex, updates.thoughtIndex),
         lexemeIndex: mergeUpdates(snapshot.lexemeIndex, updates.lexemeIndex),
       }

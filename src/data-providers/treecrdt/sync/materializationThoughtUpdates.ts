@@ -2,6 +2,7 @@ import type { Change } from '@treecrdt/interface/engine'
 import type Index from '../../../@types/IndexType'
 import type Thought from '../../../@types/Thought'
 import type ThoughtId from '../../../@types/ThoughtId'
+import { GLOBAL_ROOT_TOKEN } from '../../../constants'
 import type { DataProvider } from '../../DataProvider'
 
 /** Provider reads needed to refresh materialized TreeCRDT changes. */
@@ -20,6 +21,7 @@ const addTreeOrderRankProjection = async (
   db: MaterializationStore,
   parentId: ThoughtId,
 ): Promise<void> => {
+  if (parentId === GLOBAL_ROOT_TOKEN) return
   const parent = await db.getThoughtById(parentId)
   if (!parent) return
 
@@ -61,7 +63,7 @@ export async function refreshThoughtsFromMaterializationChanges(
         orderParents.add(ch.parentAfter as ThoughtId)
         break
       case 'delete':
-        deleted.add(ch.node as ThoughtId)
+        touched.add(ch.node as ThoughtId)
         if (ch.parentBefore) {
           touched.add(ch.parentBefore as ThoughtId)
           orderParents.add(ch.parentBefore as ThoughtId)
@@ -80,15 +82,16 @@ export async function refreshThoughtsFromMaterializationChanges(
     }
   }
 
-  for (const id of deleted) {
-    touched.delete(id)
-  }
-
   const thoughtIndexUpdates: Index<Thought> = {}
 
   for (const id of touched) {
+    if (id === GLOBAL_ROOT_TOKEN) continue
     const thought = await db.getThoughtById(id)
-    if (!thought) continue
+    // Events may have been coalesced or superseded while a local write was in flight.
+    if (!thought) {
+      deleted.add(id)
+      continue
+    }
     thoughtIndexUpdates[thought.id] = thought
     orderParents.add(thought.parentId)
   }

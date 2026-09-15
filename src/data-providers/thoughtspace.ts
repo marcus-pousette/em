@@ -13,6 +13,7 @@ export type PersistThoughtspaceBatch = Parameters<DataProvider['updateThoughts']
 export type ThoughtspaceStorage = 'memory' | 'persistent'
 
 export type ThoughtspaceMaterializationSnapshot = {
+  generation: number
   thoughtIndex: Index<Thought>
   lexemeIndex: Index<Lexeme>
 }

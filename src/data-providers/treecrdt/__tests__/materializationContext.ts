@@ -49,11 +49,11 @@ it('retains the originating materialization context after rebinding the provider
   })
   const provider = createTreecrdtDataProvider()
   const bridgeOne = {
-    getSnapshot: () => ({ thoughtIndex: {}, lexemeIndex: {} }),
+    getSnapshot: () => ({ generation: 0, thoughtIndex: {}, lexemeIndex: {} }),
     apply: vi.fn(),
   }
   const bridgeTwo = {
-    getSnapshot: () => ({ thoughtIndex: {}, lexemeIndex: {} }),
+    getSnapshot: () => ({ generation: 0, thoughtIndex: {}, lexemeIndex: {} }),
     apply: vi.fn(),
   }
 

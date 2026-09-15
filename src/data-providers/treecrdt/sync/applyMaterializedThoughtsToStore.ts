@@ -7,7 +7,7 @@ import type { ThoughtspaceMaterializationBridge } from '../../thoughtspace'
 import { refreshAttributeChildrenFromChanges } from '../attributeChildren'
 import {
   getTreecrdtWriteBarrierVersion,
-  isTreecrdtLocalMaterialization,
+  isStaleTreecrdtMaterialization,
   waitForTreecrdtWriteBarrier,
 } from '../writeBarrier'
 import { enqueueMaterializedThoughtsToStoreWork, getMaterializedThoughtsToStoreVersion } from './materializationQueue'
@@ -18,33 +18,49 @@ type MaterializationContext = Readonly<{
   bridge?: ThoughtspaceMaterializationBridge
   client: TreecrdtClient
   db: MaterializationStore
+  pending: { event: MaterializationEvent; keys: Promise<string[]>; generation: number | undefined }[]
 }>
 
 /** Serializes UI refreshes without putting index persistence behind the local-write barrier. */
 const applyMaterializedThoughtsToStore = (
   event: MaterializationEvent,
-  { bridge, client, db }: MaterializationContext,
+  { bridge, client, db, pending }: MaterializationContext,
   changedKeys: Promise<string[]>,
-): Promise<void> =>
-  enqueueMaterializedThoughtsToStoreWork(async () => {
-    const keys = await changedKeys
-    if (!bridge) return
-    const local = isTreecrdtLocalMaterialization(event)
-    if (!local) await refreshAttributeChildrenFromChanges(client, event.changes)
+): Promise<void> => {
+  pending.push({ event, keys: changedKeys, generation: bridge?.getSnapshot().generation })
+  return enqueueMaterializedThoughtsToStoreWork(async () => {
+    if (pending.length === 0) return
+    let events: MaterializationContext['pending'] = []
 
     // A later optimistic edit or materialization invalidates an asynchronous read. Retry from current storage.
     while (true) {
       await waitForTreecrdtWriteBarrier()
+      events.push(...pending.splice(0))
+      // Index persistence is independent of UI publication, including discarded generations.
+      await Promise.all(events.map(entry => entry.keys))
+      if (!bridge) return
       const snapshot = bridge.getSnapshot()
+      events = events.filter(
+        entry =>
+          entry.generation === snapshot.generation && !isStaleTreecrdtMaterialization(entry.event, snapshot.generation),
+      )
+      if (events.length === 0) return
       const writeVersion = getTreecrdtWriteBarrierVersion()
       const materializationVersion = getMaterializedThoughtsToStoreVersion()
+      const changes = events.flatMap(entry => entry.event.changes)
+      const keys = [...new Set((await Promise.all(events.map(entry => entry.keys))).flat())]
+      await refreshAttributeChildrenFromChanges(client, changes)
       const thoughtIndexUpdates: Index<Thought | null> = {}
-      if (!local) {
-        const { deletedIds, thoughts } = await refreshThoughtsFromMaterializationChanges(event.changes, db)
-        for (const id of deletedIds) thoughtIndexUpdates[id] = null
-        for (const latest of thoughts) {
-          const pending = snapshot.thoughtIndex[latest.id]?.pending || snapshot.thoughtIndex[latest.parentId]?.pending
-          thoughtIndexUpdates[latest.id] = { ...latest, ...(pending ? { pending } : null) }
+      const { deletedIds, thoughts } = await refreshThoughtsFromMaterializationChanges(changes, db)
+      for (const id of deletedIds) thoughtIndexUpdates[id] = null
+      for (const latest of thoughts) {
+        const previous = snapshot.thoughtIndex[latest.id]
+        const pending = previous?.pending || snapshot.thoughtIndex[latest.parentId]?.pending
+        thoughtIndexUpdates[latest.id] = {
+          ...latest,
+          ...(pending ? { pending } : null),
+          ...(previous?.generating !== undefined ? { generating: previous.generating } : null),
+          ...(previous?.splitSource !== undefined ? { splitSource: previous.splitSource } : null),
         }
       }
       const values = await db.getLexemesByIds(keys)
@@ -69,5 +85,6 @@ const applyMaterializedThoughtsToStore = (
       return
     }
   })
+}
 
 export default applyMaterializedThoughtsToStore

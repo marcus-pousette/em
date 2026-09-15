@@ -46,27 +46,29 @@ export async function waitForTreecrdtWriteBarrier(): Promise<void> {
   }
 }
 
-/** Creates local write metadata used to identify materialization events already applied optimistically by the app. */
-export function createTreecrdtLocalWriteOptions(): LocalWriteOptions {
+/** Namespaces app write IDs to this tab, with unique IDs for bootstrap/provider-only writes. */
+export function createTreecrdtLocalWriteOptions(writeId?: string): LocalWriteOptions {
   localWriteCounter += 1
-  return { writeId: `${localWriteIdPrefix}${localWriteCounter}` }
+  return { writeId: `${localWriteIdPrefix}${writeId ?? localWriteCounter}` }
 }
 
-/** True when a materialization event was produced by this tab's own optimistic TreeCRDT write. */
-export const isTreecrdtLocalMaterialization = (event: MaterializationEvent): boolean => {
-  return (
-    event.changes.length > 0 &&
-    event.changes.every(change => {
-      const writeIds = change.source?.writeIds
-      return !!writeIds?.length && writeIds.every(writeId => writeId.startsWith(localWriteIdPrefix))
-    })
+/** True when every change belongs to this tab's writes from a cleared Redux generation. */
+export const isStaleTreecrdtMaterialization = (event: MaterializationEvent, generation: number): boolean =>
+  event.changes.length > 0 &&
+  event.changes.every(change =>
+    change.source?.writeIds?.length
+      ? change.source.writeIds.every(
+          id =>
+            id.startsWith(`${localWriteIdPrefix}generation:`) &&
+            !id.startsWith(`${localWriteIdPrefix}generation:${generation}:`),
+        )
+      : false,
   )
-}
 
 export default {
   createTreecrdtLocalWriteOptions,
   getTreecrdtWriteBarrierVersion,
-  isTreecrdtLocalMaterialization,
+  isStaleTreecrdtMaterialization,
   waitForTreecrdtWriteBarrier,
   withTreecrdtWriteBarrier,
 }

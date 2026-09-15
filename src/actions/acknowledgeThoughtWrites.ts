@@ -23,7 +23,7 @@ const acknowledgeThoughtWrites = (
       ...state.thoughts,
       lexemeIndex: projectLexemes(
         mergeUpdates(state.thoughts.lexemeIndex, lexemeIndex),
-        Object.fromEntries(Object.entries(pendingThoughtWrites).map(([id, write]) => [id, write.thought])),
+        Object.fromEntries(Object.keys(pendingThoughtWrites).map(id => [id, state.thoughts.thoughtIndex[id] ?? null])),
       ),
     },
   }

@@ -159,6 +159,7 @@ const initialState = (created: Timestamp = timestamp()) => {
     tip: null,
     pushQueue: [],
     pendingThoughtWrites: {},
+    thoughtspaceGeneration: 0,
     thoughts: initialThoughts(created),
     undoPatches: [],
     showCommandCenter: false,

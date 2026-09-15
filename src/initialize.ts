@@ -66,6 +66,7 @@ const initializeInternal = async ({ storage }: InitializeOptions) => {
       getSnapshot: () => {
         const state = store.getState()
         return {
+          generation: state.thoughtspaceGeneration,
           thoughtIndex: state.thoughts.thoughtIndex,
           lexemeIndex: state.thoughts.lexemeIndex,
         }
@@ -78,6 +79,7 @@ const initializeInternal = async ({ storage }: InitializeOptions) => {
             local: false,
             remote: false,
             repairCursor: true,
+            materialized: true,
           }),
         )
       },
