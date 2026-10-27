@@ -1,11 +1,13 @@
 import _ from 'lodash'
+import Index from '../@types/IndexType'
+import Lexeme from '../@types/Lexeme'
 import Path from '../@types/Path'
 import PushBatch from '../@types/PushBatch'
 import RecentlyEditedTree from '../@types/RecentlyEditedTree'
 import State from '../@types/State'
 import Thought from '../@types/Thought'
 import Thunk from '../@types/Thunk'
-import { HOME_TOKEN } from '../constants'
+import { ABSOLUTE_TOKEN, EM_TOKEN, GLOBAL_ROOT_TOKEN, HOME_TOKEN } from '../constants'
 import expandThoughts from '../selectors/expandThoughts'
 import getSetting from '../selectors/getSetting'
 import pathToThought from '../selectors/pathToThought'
@@ -13,12 +15,18 @@ import rootedParentOf from '../selectors/rootedParentOf'
 import simplifyPath from '../selectors/simplifyPath'
 import thoughtToPath from '../selectors/thoughtToPath'
 import { registerActionMetadata } from '../util/actionMetadata.registry'
+import addContext from '../util/addContext'
+import hashThought from '../util/hashThought'
 import head from '../util/head'
 import keyValueBy from '../util/keyValueBy'
 import mergeUpdates from '../util/mergeUpdates'
+import newLexeme from '../util/newLexeme'
 import reducerFlow from '../util/reducerFlow'
+import removeContext from '../util/removeContext'
 
-export type UpdateThoughtsOptions = PushBatch & {
+export type UpdateThoughtsOptions = Omit<PushBatch, 'lexemeIndexUpdates'> & {
+  /** Omit to derive memberships from thought changes. Explicit patches, including {}, bypass derivation for loading, undo, and cache eviction. */
+  lexemeIndexUpdates?: PushBatch['lexemeIndexUpdates']
   cursorOffset?: number
   // callback for when the updates have been synced with IDB
   idbSynced?: () => void
@@ -34,6 +42,39 @@ export type UpdateThoughtsOptions = PushBatch & {
    */
   repairCursor?: boolean
 }
+
+/** Derives optimistic membership changes without discarding contexts whose thoughts are not loaded. */
+const deriveLexemeUpdates = (state: State, thoughtIndexUpdates: Index<Thought | null>): Index<Lexeme | null> =>
+  Object.entries(thoughtIndexUpdates).reduce<Index<Lexeme | null>>((updates, [id, thought]) => {
+    const oldThought = state.thoughts.thoughtIndex[id]
+    if (
+      id === HOME_TOKEN ||
+      id === EM_TOKEN ||
+      id === ABSOLUTE_TOKEN ||
+      id === GLOBAL_ROOT_TOKEN ||
+      oldThought?.value === thought?.value
+    )
+      return updates
+
+    const oldKey = oldThought && hashThought(oldThought.value)
+    const newKey = thought && hashThought(thought.value)
+    if (oldKey && oldKey !== newKey) {
+      const lexeme = oldKey in updates ? updates[oldKey] : state.thoughts.lexemeIndex[oldKey]
+      if (lexeme) {
+        const remaining = removeContext(lexeme, id)
+        updates[oldKey] = remaining.contexts.length ? remaining : null
+      }
+    }
+    if (thought && newKey) {
+      const lexeme = newKey in updates ? updates[newKey] : state.thoughts.lexemeIndex[newKey]
+      updates[newKey] = !lexeme
+        ? newLexeme({ id: thought.id, value: thought.value })
+        : oldThought
+          ? addContext(lexeme, { id: thought.id })
+          : { ...lexeme, contexts: [...lexeme.contexts, thought.id] }
+    }
+    return updates
+  }, {})
 
 /** A reducer that repairs the cursor if it moved or was deleted. */
 // TODO: Not fully tested when cursor is in a context view.
@@ -82,7 +123,7 @@ const updateThoughts = (
   {
     cursorOffset,
     favoriteOrder,
-    lexemeIndexUpdates,
+    lexemeIndexUpdates: explicitLexemeIndexUpdates,
     thoughtIndexUpdates,
     recentlyEdited,
     pendingDeletes,
@@ -99,7 +140,7 @@ const updateThoughts = (
   if (
     favoriteOrder === undefined &&
     Object.keys(thoughtIndexUpdates).length === 0 &&
-    Object.keys(lexemeIndexUpdates).length === 0
+    Object.keys(explicitLexemeIndexUpdates || {}).length === 0
   )
     return state
 
@@ -140,6 +181,7 @@ const updateThoughts = (
 
   // TODO: Can we use { overwritePending: !local } and get rid of the overwritePending option to updateThoughts? i.e. Are there any false positives when local is false?
   const thoughtIndex = mergeUpdates(thoughtIndexOld, thoughtIndexUpdatesFresh, { overwritePending })
+  const lexemeIndexUpdates = explicitLexemeIndexUpdates ?? deriveLexemeUpdates(state, thoughtIndexUpdatesFresh)
   const lexemeIndex = mergeUpdates(lexemeIndexOld, lexemeIndexUpdates, { overwritePending })
 
   const recentlyEditedNew = recentlyEdited || state.recentlyEdited

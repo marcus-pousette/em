@@ -1,6 +1,5 @@
 import _ from 'lodash'
 import Index from '../@types/IndexType'
-import Lexeme from '../@types/Lexeme'
 import Path from '../@types/Path'
 import State from '../@types/State'
 import Thought from '../@types/Thought'
@@ -8,7 +7,6 @@ import ThoughtId from '../@types/ThoughtId'
 import Thunk from '../@types/Thunk'
 import updateThoughts from '../actions/updateThoughts'
 import { clientId } from '../data-providers/thoughtspaceSession'
-import getLexeme from '../selectors/getLexeme'
 import getMovePlacement from '../selectors/getMovePlacement'
 import getSortPreference from '../selectors/getSortPreference'
 import getSortedRank from '../selectors/getSortedRank'
@@ -16,7 +14,6 @@ import getThoughtById from '../selectors/getThoughtById'
 import { registerActionMetadata } from '../util/actionMetadata.registry'
 import { childrenMapKey } from '../util/createChildrenMap'
 import createId from '../util/createId'
-import hashThought from '../util/hashThought'
 import head from '../util/head'
 import isEmptyOrEmojiOnly from '../util/isEmptyOrEmojiOnly'
 import keyValueBy from '../util/keyValueBy'
@@ -36,17 +33,6 @@ interface Payload {
  */
 const createThought = (state: State, { path, value, rank, id, idbSynced, splitSource }: Payload) => {
   id = id || createId()
-  const lexemeOld = getLexeme(state, value)
-
-  // create Lexeme if it does not exist
-  const lexemeNew: Lexeme = {
-    ...(lexemeOld || {
-      created: timestamp(),
-      lastUpdated: timestamp(),
-      updatedBy: clientId,
-    }),
-    contexts: [...(lexemeOld?.contexts || []), ...(path.length > 0 ? [id] : [])],
-  }
 
   const parentId = head(path)
   const parent = getThoughtById(state, parentId)
@@ -110,10 +96,6 @@ const createThought = (state: State, { path, value, rank, id, idbSynced, splitSo
     updatedBy: clientId,
   }
 
-  const lexemeIndexUpdates = {
-    [hashThought(value)]: lexemeNew,
-  }
-
   // A new rank is invisible to the persistence layer on its own: sibling order is stored structurally there and only
   // changes on a move, which is minted from an explicit placement (#5126).
   const movePlacements: Index<ThoughtId | null> =
@@ -121,7 +103,7 @@ const createThought = (state: State, { path, value, rank, id, idbSynced, splitSo
       ? { [parentId]: getMovePlacement(state, parent.parentId, { id: parentId, rank: parentRank }) }
       : {}
 
-  return updateThoughts(state, { lexemeIndexUpdates, thoughtIndexUpdates, idbSynced, movePlacements })
+  return updateThoughts(state, { thoughtIndexUpdates, idbSynced, movePlacements })
 }
 
 /** Action-creator for createThought. */

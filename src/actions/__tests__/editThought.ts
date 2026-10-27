@@ -1,3 +1,4 @@
+import deleteThought from '../../actions/deleteThought'
 import importText from '../../actions/importText'
 import newSubthought from '../../actions/newSubthought'
 import newThought from '../../actions/newThought'
@@ -6,8 +7,10 @@ import contextToThoughtId from '../../selectors/contextToThoughtId'
 import exportContext from '../../selectors/exportContext'
 import getContexts from '../../selectors/getContexts'
 import getLexeme from '../../selectors/getLexeme'
+import getThoughtById from '../../selectors/getThoughtById'
 import parentOfThought from '../../selectors/parentOfThought'
 import contextToThought from '../../test-helpers/contextToThought'
+import deleteThoughtAtFirstMatch from '../../test-helpers/deleteThoughtAtFirstMatch'
 import editThought from '../../test-helpers/editThoughtByContext'
 import expectPathToEqual from '../../test-helpers/expectPathToEqual'
 import getAllChildrenAsThoughtsByContext from '../../test-helpers/getAllChildrenAsThoughtsByContext'
@@ -15,6 +18,7 @@ import getAllChildrenByContext from '../../test-helpers/getAllChildrenByContext'
 import newThoughtAtFirstMatch from '../../test-helpers/newThoughtAtFirstMatch'
 import setCursor from '../../test-helpers/setCursorFirstMatch'
 import { compareThought } from '../../util/compareThought'
+import hashThought from '../../util/hashThought'
 import initialState from '../../util/initialState'
 import reducerFlow from '../../util/reducerFlow'
 
@@ -270,6 +274,48 @@ it('do not duplicate children when new and old context are same', () => {
   expect(exported).toBe(`- ${HOME_TOKEN}
   - a
     - b`)
+})
+
+it('keeps sibling memberships when an edit has the same normalized hash', () => {
+  const state = importText(initialState(), { text: '- cats\n- cat' })
+  const catId = contextToThought(state, ['cat'])!.id
+  const catsId = contextToThought(state, ['cats'])!.id
+  expect(hashThought('cats')).toBe(hashThought('CAT'))
+
+  const stateNew = editThought(['cats'], 'CAT')(state)
+
+  expect(contextToThought(stateNew, ['CAT'])!.id).toBe(catsId)
+  expect(getLexeme(stateNew, 'cat')?.contexts).toEqual([catId, catsId])
+  expect(getLexeme(stateNew, 'cat')?.created).toBe(getLexeme(state, 'cat')?.created)
+  expect(getLexeme(state, 'cat')?.contexts).toEqual([catsId, catId])
+})
+
+it('preserves known unloaded memberships through creation, rename, and deletion', () => {
+  const state = importText(initialState(), { text: '- hidden\n  - cat\n- visible\n  - cat\n- rename\n  - dog' })
+  const hiddenId = contextToThought(state, ['hidden'])!.id
+  const hiddenCatId = contextToThought(state, ['hidden', 'cat'])!.id
+  const visibleCatId = contextToThought(state, ['visible', 'cat'])!.id
+  const renamedId = contextToThought(state, ['rename', 'dog'])!.id
+  const unloaded = deleteThought(state, {
+    pathParent: [hiddenId],
+    thoughtId: hiddenCatId,
+    local: false,
+    remote: false,
+  })
+  expect(getThoughtById(unloaded, hiddenCatId)).toBeUndefined()
+  expect(getLexeme(unloaded, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId])
+
+  const created = newThoughtAtFirstMatch({ at: ['visible'], value: 'cats', insertNewSubthought: true })(unloaded)
+  const createdId = contextToThought(created, ['visible', 'cats'])!.id
+  expect(getLexeme(created, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId, createdId])
+
+  const renamed = editThought(['rename', 'dog'], 'CAT')(created)
+  expect(getLexeme(renamed, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId, createdId, renamedId])
+  expect(getLexeme(renamed, 'dog')).toBeUndefined()
+
+  const deleted = deleteThoughtAtFirstMatch(['visible', 'cats'])(renamed)
+  expect(getThoughtById(deleted, createdId)).toBeUndefined()
+  expect(getLexeme(deleted, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId, renamedId])
 })
 
 describe('sort', () => {
