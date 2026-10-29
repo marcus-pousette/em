@@ -7206,9 +7206,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@treecrdt/auth@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-auth-0.1.2.tgz":
+"@treecrdt/auth@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-auth-0.1.2.tgz":
   version: 0.1.2
-  resolution: "@treecrdt/auth@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-auth-0.1.2.tgz"
+  resolution: "@treecrdt/auth@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-auth-0.1.2.tgz"
   dependencies:
     "@noble/ed25519": "npm:^3.0.0"
     "@noble/hashes": "npm:^1.8.0"
@@ -7220,32 +7220,32 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@treecrdt/discovery@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-discovery-0.1.0.tgz":
+"@treecrdt/discovery@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-discovery-0.1.0.tgz":
   version: 0.1.0
-  resolution: "@treecrdt/discovery@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-discovery-0.1.0.tgz"
+  resolution: "@treecrdt/discovery@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-discovery-0.1.0.tgz"
   checksum: 10c0/3190e765222fa0e72a1427fa445311c8e4051208065fde410c4118f0ad2b37c50f91b475f6eec8c4d527b3fcf7b28b4dfa9174983b9b7f1809fcb98735862ffc
   languageName: node
   linkType: hard
 
-"@treecrdt/interface@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-interface-0.2.0.tgz":
+"@treecrdt/interface@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-interface-0.2.0.tgz":
   version: 0.2.0
-  resolution: "@treecrdt/interface@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-interface-0.2.0.tgz"
+  resolution: "@treecrdt/interface@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-interface-0.2.0.tgz"
   dependencies:
     cborg: "npm:^4.3.2"
   checksum: 10c0/bd9622d861af91e95f325b7a53fae7b9f9a681c84eb5b7b0177236124943b67d602a35e5f01dbba009783cb1b40fc18070432b3133456aa5325edd75fbcf82c1
   languageName: node
   linkType: hard
 
-"@treecrdt/riblt-wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-riblt-wasm-0.1.0.tgz":
+"@treecrdt/riblt-wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-riblt-wasm-0.1.0.tgz":
   version: 0.1.0
-  resolution: "@treecrdt/riblt-wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-riblt-wasm-0.1.0.tgz"
+  resolution: "@treecrdt/riblt-wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-riblt-wasm-0.1.0.tgz"
   checksum: 10c0/02300f13e3e9ec5dcc7ae86066d6a8f1d34f4f817465fb738153597f346b4d0d61e625f5f27d60a27d861a58995cd5c0c4c4372ff9ddbd1702d58fdeb1e765c1
   languageName: node
   linkType: hard
 
-"@treecrdt/sync-protocol@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-protocol-0.1.2.tgz":
+"@treecrdt/sync-protocol@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-protocol-0.1.2.tgz":
   version: 0.1.2
-  resolution: "@treecrdt/sync-protocol@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-protocol-0.1.2.tgz"
+  resolution: "@treecrdt/sync-protocol@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-protocol-0.1.2.tgz"
   dependencies:
     "@bufbuild/protobuf": "npm:^2.10.2"
     "@noble/hashes": "npm:^1.8.0"
@@ -7255,9 +7255,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@treecrdt/sync-server-core@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-server-core-0.1.2.tgz":
+"@treecrdt/sync-server-core@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-server-core-0.1.2.tgz":
   version: 0.1.2
-  resolution: "@treecrdt/sync-server-core@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-server-core-0.1.2.tgz"
+  resolution: "@treecrdt/sync-server-core@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-server-core-0.1.2.tgz"
   dependencies:
     "@treecrdt/sync-protocol": "npm:0.1.2"
     ws: "npm:^8.18.3"
@@ -7265,43 +7265,43 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@treecrdt/sync-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-sqlite-0.1.2.tgz":
+"@treecrdt/sync-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-sqlite-0.1.2.tgz":
   version: 0.1.2
-  resolution: "@treecrdt/sync-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-sqlite-0.1.2.tgz"
+  resolution: "@treecrdt/sync-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-sqlite-0.1.2.tgz"
   dependencies:
     "@treecrdt/auth": "npm:0.1.2"
     "@treecrdt/interface": "npm:0.2.0"
     "@treecrdt/sync-protocol": "npm:0.1.2"
-  checksum: 10c0/690e6a156ddda7380446e903cc09f82c9b43345f3589c227639cd2d6a816a5066f2f9d8152f1724de2412c4356ab80f98d73cd2d51250722c3f7391fdb6ca802
+  checksum: 10c0/bf64995d5399d4a8bc4fed3f989e099bd9df245ff0941a4dabb9686eb94d33b8232416569356fac1fca8273be63451e9c9234a27d8869f307e0bd0e096bcc8f2
   languageName: node
   linkType: hard
 
-"@treecrdt/sync@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-0.1.2.tgz":
+"@treecrdt/sync@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-0.1.2.tgz":
   version: 0.1.2
-  resolution: "@treecrdt/sync@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-0.1.2.tgz"
+  resolution: "@treecrdt/sync@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-0.1.2.tgz"
   dependencies:
     "@treecrdt/discovery": "npm:0.1.0"
     "@treecrdt/interface": "npm:0.2.0"
     "@treecrdt/sync-protocol": "npm:0.1.2"
     "@treecrdt/sync-sqlite": "npm:0.1.2"
-  checksum: 10c0/125bcf9ebbf917c30a93de99197516d9fec62b985ebf4fdba0e0657df680909a9aa100ecb9cbd050c9cd53d4e5707c8af849f3fc01d43dc32687fa48932cb3e0
+  checksum: 10c0/5796c77e83606e1c190fdce4b61284df688f492844b27c2ed226cd79043d7fadb8499f257c2b28d5163f7d931b5f5250691977ec5c2f042decb61f59e37b8107
   languageName: node
   linkType: hard
 
-"@treecrdt/wa-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-wa-sqlite-0.4.2.tgz":
+"@treecrdt/wa-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-wa-sqlite-0.4.2.tgz":
   version: 0.4.2
-  resolution: "@treecrdt/wa-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-wa-sqlite-0.4.2.tgz"
+  resolution: "@treecrdt/wa-sqlite@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-wa-sqlite-0.4.2.tgz"
   dependencies:
     "@noble/hashes": "npm:^1.8.0"
     "@treecrdt/interface": "npm:0.2.0"
     comlink: "npm:^4.4.2"
-  checksum: 10c0/627e9adf82f32e388b532f82680fdc779eeb493dd25f53fb4280002c0515bd0b2634d276d55c31a8d2169c20fd63117a55b4a8ab55d2b2b2d4d6d84130d288f9
+  checksum: 10c0/8f9858a425533083b5cc10935918c5c9fcb0b947a300c7c45e4df27c96768fb4882c7b6b8c9db519bed1bda889d3726d4fba30e254e49934c55a236917944058
   languageName: node
   linkType: hard
 
-"@treecrdt/wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-wasm-0.0.1.tgz":
+"@treecrdt/wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-wasm-0.0.1.tgz":
   version: 0.0.1
-  resolution: "@treecrdt/wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-wasm-0.0.1.tgz"
+  resolution: "@treecrdt/wasm@https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-wasm-0.0.1.tgz"
   dependencies:
     "@treecrdt/interface": "npm:0.2.0"
   checksum: 10c0/b9845e33d3d5242231e7957fefee17913e6340e08e2a7de19d2194caf8634c7524f1d559f07ec9fa962cb66a75c6adc3273a6fdb9d3aea7f1adf302f3cf6ce4c
@@ -12455,15 +12455,15 @@ __metadata:
     "@testing-library/react": "npm:^16.3.3"
     "@testing-library/user-event": "npm:^14.6.8"
     "@total-typescript/ts-reset": "npm:^0.6.1"
-    "@treecrdt/auth": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-auth-0.1.2.tgz"
-    "@treecrdt/discovery": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-discovery-0.1.0.tgz"
-    "@treecrdt/interface": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-interface-0.2.0.tgz"
-    "@treecrdt/riblt-wasm": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-riblt-wasm-0.1.0.tgz"
-    "@treecrdt/sync": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-0.1.2.tgz"
-    "@treecrdt/sync-protocol": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-protocol-0.1.2.tgz"
-    "@treecrdt/sync-server-core": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-server-core-0.1.2.tgz"
-    "@treecrdt/sync-sqlite": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-sync-sqlite-0.1.2.tgz"
-    "@treecrdt/wa-sqlite": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-be09f093/treecrdt-wa-sqlite-0.4.2.tgz"
+    "@treecrdt/auth": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-auth-0.1.2.tgz"
+    "@treecrdt/discovery": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-discovery-0.1.0.tgz"
+    "@treecrdt/interface": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-interface-0.2.0.tgz"
+    "@treecrdt/riblt-wasm": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-riblt-wasm-0.1.0.tgz"
+    "@treecrdt/sync": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-0.1.2.tgz"
+    "@treecrdt/sync-protocol": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-protocol-0.1.2.tgz"
+    "@treecrdt/sync-server-core": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-server-core-0.1.2.tgz"
+    "@treecrdt/sync-sqlite": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-sync-sqlite-0.1.2.tgz"
+    "@treecrdt/wa-sqlite": "https://github.com/marcus-pousette/treecrdt/releases/download/changed-since-preview-4a4f4621/treecrdt-wa-sqlite-0.4.2.tgz"
     "@trivago/prettier-plugin-sort-imports": "npm:^6.0.2"
     "@types/clipboard": "npm:^2.0.10"
     "@types/dompurify": "npm:^3.2.0"
