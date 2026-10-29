@@ -1,4 +1,4 @@
-import type { Change } from '@treecrdt/interface/engine'
+import type { Change, TreecrdtChangedNode } from '@treecrdt/interface/engine'
 import type { TreecrdtClient } from '@treecrdt/wa-sqlite'
 import type Lexeme from '../../@types/Lexeme'
 import type ThoughtId from '../../@types/ThoughtId'
@@ -7,11 +7,18 @@ import { GLOBAL_ROOT_TOKEN } from '../../constants'
 import hashThought from '../../util/hashThought'
 import { decodeThoughtPayload } from './payload'
 import { SYSTEM_ROOT_THOUGHT_IDS } from './systemThoughtIds'
-import { getNodePayload } from './treeReads'
 
 const TABLE = 'em_lexeme_memberships'
 const FAVORITE_KEY = hashThought('=favorite')
 const ROOT_IDS = new Set<string>([GLOBAL_ROOT_TOKEN, ...SYSTEM_ROOT_THOUGHT_IDS])
+
+/** Hashes of the values a change batch carried. A later write may have replaced one in storage while Redux still shows it. */
+export const payloadKeys = (changes: readonly Change[]): string[] =>
+  changes.flatMap(change =>
+    !ROOT_IDS.has(change.node) && 'payload' in change && change.payload
+      ? [hashThought(decodeThoughtPayload(change.payload).value)]
+      : [],
+  )
 
 /** Maintains one membership per live thought, independent of which contexts Redux has loaded. */
 const createLexemeIndex = async (client: TreecrdtClient) => {
@@ -44,52 +51,62 @@ const createLexemeIndex = async (client: TreecrdtClient) => {
       JSON.stringify(contexts),
     ])
 
-  /** Replaces a thought's membership from current materialized state, returning both affected hashes. */
-  const reindex = async (id: ThoughtId): Promise<string[]> => {
-    if (ROOT_IDS.has(id)) return []
-    const previous = await client.runner.getText(`SELECT lexeme_hash FROM ${TABLE} WHERE thought_id = ?1`, [id])
-    const payloadBytes = await getNodePayload(client, id)
-    if (!payloadBytes) {
-      await client.runner.getText(`DELETE FROM ${TABLE} WHERE thought_id = ?1`, [id])
-      return previous ? [previous] : []
-    }
-    const payload = decodeThoughtPayload(payloadBytes)
-    const key = hashThought(payload.value)
-    // getText also executes parameterized writes (returning null); exec does not accept bind parameters.
-    await client.runner.getText(
-      `INSERT INTO ${TABLE} (thought_id, lexeme_hash, created, last_updated, updated_by) VALUES (?1, ?2, ?3, ?4, ?5)
-       ON CONFLICT(thought_id) DO UPDATE SET lexeme_hash = excluded.lexeme_hash, created = excluded.created,
-         last_updated = excluded.last_updated, updated_by = excluded.updated_by`,
-      [id, key, payload.created, payload.lastUpdated, payload.updatedBy],
-    )
-    return previous && previous !== key ? [previous, key] : [key]
-  }
-
-  /** Rebuilds memberships from live materialized thoughts. */
-  const rebuild = async (): Promise<void> => {
-    await client.runner.exec(`DELETE FROM ${TABLE}`)
-    for (const row of await client.tree.dump()) {
-      if (!row.tombstone) await reindex(row.node as ThoughtId)
-    }
-  }
-
-  /** Updates memberships from materialized state and returns the affected hashes. */
-  const applyChanges = async (changes: readonly Change[]): Promise<string[]> => {
+  /** Replaces the memberships of changed nodes from their current state, returning every affected hash. */
+  const applyNodes = async (nodes: readonly TreecrdtChangedNode[]): Promise<string[]> => {
+    const changed = nodes.filter(node => !ROOT_IDS.has(node.node))
+    if (changed.length === 0) return []
+    const previous = JSON.parse(
+      (await client.runner.getText(
+        `SELECT json_group_object(thought_id, json_array(lexeme_hash, created, last_updated, updated_by)) FROM ${TABLE}
+         WHERE thought_id IN (SELECT value FROM json_each(?1))`,
+        [JSON.stringify(changed.map(node => node.node))],
+      )) ?? '{}',
+    ) as Record<string, [string, number, number, string]>
     const keys = new Set<string>()
-    // A subsequent write may already have superseded this value in storage, but Redux may still display it.
-    for (const change of changes) {
-      if (!ROOT_IDS.has(change.node) && 'payload' in change && change.payload) {
-        keys.add(hashThought(decodeThoughtPayload(change.payload).value))
+    const gone: string[] = []
+    const live: [string, string, number, number, string][] = []
+    for (const node of changed) {
+      const before = previous[node.node]
+      if (node.tombstone || !node.payload) {
+        if (!before) continue
+        keys.add(before[0])
+        gone.push(node.node)
+        continue
       }
+      const payload = decodeThoughtPayload(node.payload)
+      const row: [string, string, number, number, string] = [
+        node.node,
+        hashThought(payload.value),
+        payload.created,
+        payload.lastUpdated,
+        payload.updatedBy,
+      ]
+      // A move changes no membership; skip rows that already match.
+      if (before && before.every((value, i) => value === row[i + 1])) continue
+      if (before) keys.add(before[0])
+      keys.add(row[1])
+      live.push(row)
     }
-    // Moves change parent/order, not lexeme membership.
-    for (const id of new Set(
-      changes.filter(change => change.kind !== 'move').map(change => change.node as ThoughtId),
-    )) {
-      for (const key of await reindex(id)) keys.add(key)
+    // getText also executes parameterized writes (returning null); exec does not accept bind parameters.
+    if (gone.length > 0) {
+      await client.runner.getText(`DELETE FROM ${TABLE} WHERE thought_id IN (SELECT value FROM json_each(?1))`, [
+        JSON.stringify(gone),
+      ])
+    }
+    if (live.length > 0) {
+      await client.runner.getText(
+        `INSERT INTO ${TABLE} (thought_id, lexeme_hash, created, last_updated, updated_by)
+         SELECT value->>0, value->>1, value->>2, value->>3, value->>4 FROM json_each(?1) WHERE true
+         ON CONFLICT(thought_id) DO UPDATE SET lexeme_hash = excluded.lexeme_hash, created = excluded.created,
+           last_updated = excluded.last_updated, updated_by = excluded.updated_by`,
+        [JSON.stringify(live)],
+      )
     }
     return [...keys]
   }
+
+  /** Removes every membership before a full read rebuilds them. */
+  const clear = () => client.runner.exec(`DELETE FROM ${TABLE}`)
 
   /** Assembles Lexemes from memberships, preserving requested key order. */
   const getLexemesByIds = async (keys: string[]): Promise<(Lexeme | undefined)[]> => {
@@ -140,8 +157,8 @@ const createLexemeIndex = async (client: TreecrdtClient) => {
   }
 
   return {
-    rebuild,
-    applyChanges,
+    applyNodes,
+    clear,
     setFavoriteOrder,
     getLexemesByIds,
     getLexemeById: async (key: string) => (await getLexemesByIds([key]))[0],
