@@ -6,6 +6,7 @@ import hashThought from '../../../util/hashThought'
 import type { DataProvider } from '../../DataProvider'
 import createTreecrdtThoughtspace from '../runtime'
 import createTreecrdtDataProvider, { createIndexedChildrenMap } from '../thoughtspace'
+import { getNodeChildren } from '../treeReads'
 
 /** Initializes an isolated in-memory TreeCRDT client and thoughtspace for unit tests. */
 const treecrdt = createTreecrdtThoughtspace()
@@ -170,10 +171,7 @@ it('excludes the moving thought from stale rank placement', async () => {
 
 // https://github.com/cybersemics/em/pull/4325#issuecomment-5248342036
 it('reads sibling order once per thought when inserting a wide batch', async () => {
-  const client = await createTreecrdtClient({
-    storage: { type: 'memory' },
-    runtime: { type: 'direct' },
-  })
+  const client = await createTreecrdtClient({ docId: 'test' })
   const provider = createTreecrdtDataProvider()
 
   try {
@@ -181,15 +179,16 @@ it('reads sibling order once per thought when inserting a wide batch', async () 
     await persistThoughtsTo(provider.db, [thought(PARENT_ID, EM_TOKEN, 'parent', 0)])
 
     const childIds = Array.from({ length: 40 }, (_, index) => (index + 512).toString(16).padStart(32, '0') as ThoughtId)
-    const childrenSpy = vi.spyOn(client.tree, 'children')
+    const treeReads = vi.spyOn(client.tree, 'get')
 
     await persistThoughtsTo(
       provider.db,
       childIds.map((id, index) => thought(id, PARENT_ID, `child-${index}`, index + 0.5)),
     )
 
-    expect(childrenSpy).toHaveBeenCalledTimes(childIds.length)
-    await expect(client.tree.children(PARENT_ID)).resolves.toEqual(childIds)
+    // Sibling order is read through the parent's node handle, once per inserted thought.
+    expect(treeReads.mock.calls.filter(([id]) => id === PARENT_ID)).toHaveLength(childIds.length)
+    await expect(getNodeChildren(client, PARENT_ID)).resolves.toEqual(childIds)
   } finally {
     await client.drop()
   }
@@ -229,7 +228,7 @@ it('keeps separately created thoughtspace instances isolated', async () => {
 })
 
 it('rebuilds memberships and preserves favorite order when opening a database with the old lexeme table', async () => {
-  const client = await createTreecrdtClient({ storage: { type: 'memory' }, runtime: { type: 'direct' } })
+  const client = await createTreecrdtClient({ docId: 'test' })
   const replicaId = new Uint8Array(32).fill(1)
   const provider = createTreecrdtDataProvider()
   const close = await provider.bindClient(client, replicaId)
@@ -274,7 +273,7 @@ it('rebuilds memberships and preserves favorite order when opening a database wi
 })
 
 it('keeps favorite order independent of membership changes and preserves it when reopening', async () => {
-  const client = await createTreecrdtClient({ storage: { type: 'memory' }, runtime: { type: 'direct' } })
+  const client = await createTreecrdtClient({ docId: 'test' })
   const replicaId = new Uint8Array(32).fill(1)
   const provider = createTreecrdtDataProvider()
   const close = await provider.bindClient(client, replicaId)
@@ -319,7 +318,7 @@ it('keeps favorite order independent of membership changes and preserves it when
 })
 
 it('does not checkpoint a partial index update and repairs both indexes on reopening', async () => {
-  const client = await createTreecrdtClient({ storage: { type: 'memory' }, runtime: { type: 'direct' } })
+  const client = await createTreecrdtClient({ docId: 'test' })
   const replicaId = new Uint8Array(32).fill(1)
   const provider = createTreecrdtDataProvider()
   const close = await provider.bindClient(client, replicaId)

@@ -6,6 +6,7 @@ import type ThoughtId from '../../@types/ThoughtId'
 import { GLOBAL_ROOT_TOKEN } from '../../constants'
 import isAttribute from '../../util/isAttribute'
 import { decodeThoughtPayload } from './payload'
+import { getNodeChildren, getNodeParent, getNodePayload } from './treeReads'
 
 /** Application-owned child value index used to restore em's attribute-keyed childrenMap contract. */
 const TABLE = 'em_attribute_children'
@@ -108,7 +109,10 @@ export async function moveAttributeChild(
 /** Reindexes a single child from TreeCRDT's current materialized state. */
 export async function reindexAttributeChild(client: TreecrdtClient, childId: ThoughtId): Promise<void> {
   await ensureAttributeChildrenSchema(client)
-  const [payloadBytes, parentIdRaw] = await Promise.all([client.tree.getPayload(childId), client.tree.parent(childId)])
+  const [payloadBytes, parentIdRaw] = await Promise.all([
+    getNodePayload(client, childId),
+    getNodeParent(client, childId),
+  ])
 
   if (!payloadBytes || parentIdRaw === null) {
     await deleteAttributeChild(client, childId)
@@ -133,7 +137,7 @@ export async function rebuildAttributeChildrenIndex(client: TreecrdtClient): Pro
   const parentQueue = [GLOBAL_ROOT_TOKEN]
   for (let i = 0; i < parentQueue.length; i++) {
     const parentId = parentQueue[i]
-    const childIds = (await client.tree.children(parentId)) as ThoughtId[]
+    const childIds = (await getNodeChildren(client, parentId)) as ThoughtId[]
 
     for (const childId of childIds) {
       await reindexAttributeChild(client, childId)
@@ -175,7 +179,7 @@ export async function refreshAttributeChildrenFromChanges(
           await deleteAttributeChild(client, childId)
           break
         }
-        const parentIdRaw = await client.tree.parent(childId)
+        const parentIdRaw = await getNodeParent(client, childId)
         if (parentIdRaw === null) {
           await deleteAttributeChild(client, childId)
         } else {
