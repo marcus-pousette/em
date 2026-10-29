@@ -7,6 +7,7 @@ import { GLOBAL_ROOT_TOKEN } from '../../constants'
 import hashThought from '../../util/hashThought'
 import { decodeThoughtPayload } from './payload'
 import { SYSTEM_ROOT_THOUGHT_IDS } from './systemThoughtIds'
+import { getNodePayload } from './treeReads'
 
 const TABLE = 'em_lexeme_memberships'
 const FAVORITE_KEY = hashThought('=favorite')
@@ -47,7 +48,7 @@ const createLexemeIndex = async (client: TreecrdtClient) => {
   const reindex = async (id: ThoughtId): Promise<string[]> => {
     if (ROOT_IDS.has(id)) return []
     const previous = await client.runner.getText(`SELECT lexeme_hash FROM ${TABLE} WHERE thought_id = ?1`, [id])
-    const payloadBytes = (await client.tree.exists(id)) ? await client.tree.getPayload(id) : null
+    const payloadBytes = await getNodePayload(client, id)
     if (!payloadBytes) {
       await client.runner.getText(`DELETE FROM ${TABLE} WHERE thought_id = ?1`, [id])
       return previous ? [previous] : []

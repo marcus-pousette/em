@@ -54,18 +54,18 @@ const clientIdToReplicaId = (clientId: string): Uint8Array =>
       })()
 
 /** Converts the selected storage lifetime to TreeCRDT client options. */
-const getTreecrdtClientOptions = (storage: ThoughtspaceStorage): ClientOptions => ({
-  storage:
-    storage === 'memory'
-      ? { type: 'memory' }
-      : {
-          type: 'opfs',
-          filename: `/treecrdt-em-${tsid}.db`,
-          fallback: 'memory',
-        },
-  runtime: { type: storage === 'memory' ? 'direct' : 'dedicated-worker' },
-  docId: tsid,
-})
+const getTreecrdtClientOptions = (storage: ThoughtspaceStorage): ClientOptions =>
+  storage === 'memory' ? { docId: tsid } : { docId: tsid, persistent: true, filename: `/treecrdt-em-${tsid}.db` }
+
+/** Opens the requested storage. TreeCRDT throws when persistent storage is unavailable; em falls back to memory. */
+const openTreecrdtClient = async (storage: ThoughtspaceStorage): Promise<TreecrdtClient> => {
+  try {
+    return await createTreecrdtClient(getTreecrdtClientOptions(storage))
+  } catch (error) {
+    if (storage === 'memory') throw error
+    return createTreecrdtClient(getTreecrdtClientOptions('memory'))
+  }
+}
 
 /** Waits until both local writes and materialization refreshes are stable. */
 const waitForStableIdle = async (): Promise<void> => {
@@ -172,7 +172,7 @@ const createTreecrdtThoughtspace = (): TreecrdtThoughtspace => {
       if (client) throw new Error('TreeCRDT client cleanup is incomplete. Retry drop before initialization.')
       const clientId = await clientIdReady
       await initPermissionsStore()
-      nextClient = await createTreecrdtClient(getTreecrdtClientOptions(options.storage))
+      nextClient = await openTreecrdtClient(options.storage)
       nextUnsubscribeMaterialization = await provider.bindClient(
         nextClient,
         clientIdToReplicaId(clientId),
