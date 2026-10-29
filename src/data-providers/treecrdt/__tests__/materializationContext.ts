@@ -76,7 +76,7 @@ it('coalesces local events into one membership read without reading back local t
 
   apply.mockClear()
   reader.mockClear()
-  // An order-only write produces an event, but must not read, write, or republish unchanged memberships.
+  // An order-only write produces an event. Catching up reads the moved membership once, but writes and republishes nothing.
   await withTreecrdtWriteBarrier(() =>
     provider.db.updateThoughts({
       thoughtIndexUpdates: { [THOUGHT_ID]: thought('b') },
@@ -84,7 +84,9 @@ it('coalesces local events into one membership read without reading back local t
     }),
   )
   await waitForMaterializedThoughtsToStore()
-  expect(reader.mock.calls.filter(([sql]) => sql.includes('em_lexeme_memberships'))).toHaveLength(0)
+  const membershipSql = reader.mock.calls.map(([sql]) => sql).filter(sql => sql.includes('em_lexeme_memberships'))
+  expect(membershipSql).toHaveLength(1)
+  expect(membershipSql[0]).toMatch(/^\s*SELECT/)
   expect(apply).not.toHaveBeenCalled()
 })
 
