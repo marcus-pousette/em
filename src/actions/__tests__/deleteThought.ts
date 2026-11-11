@@ -1,4 +1,6 @@
 import deleteEmptyThought from '../../actions/deleteEmptyThought'
+import deleteThought from '../../actions/deleteThought'
+import importText from '../../actions/importText'
 import newSubthought from '../../actions/newSubthought'
 import newThought from '../../actions/newThought'
 import { HOME_TOKEN } from '../../constants'
@@ -6,6 +8,7 @@ import childIdsToThoughts from '../../selectors/childIdsToThoughts'
 import contextToThoughtId from '../../selectors/contextToThoughtId'
 import getLexeme from '../../selectors/getLexeme'
 import getThoughtById from '../../selectors/getThoughtById'
+import contextToThought from '../../test-helpers/contextToThought'
 import deleteThoughtAtFirstMatch from '../../test-helpers/deleteThoughtAtFirstMatch'
 import expectPathToEqual from '../../test-helpers/expectPathToEqual'
 import getAllChildrenByContext from '../../test-helpers/getAllChildrenByContext'
@@ -58,6 +61,34 @@ it('delete thought with duplicate child', () => {
 
   // lexemeIndex
   expect(getLexeme(stateNew, 'a')).toBeUndefined()
+})
+
+it('keeps an outside membership when deleting duplicate values in a subtree', () => {
+  const state = importText(initialState(), { text: '- branch\n  - cat\n    - cat\n- outside\n  - cat' })
+  const outsideId = contextToThought(state, ['outside', 'cat'])!.id
+  expect(getLexeme(state, 'cat')?.contexts).toHaveLength(3)
+
+  const stateNew = deleteThoughtAtFirstMatch(['branch'])(state)
+
+  expect(getLexeme(stateNew, 'branch')).toBeUndefined()
+  expect(getLexeme(stateNew, 'cat')?.contexts).toEqual([outsideId])
+})
+
+it('evicts a lexeme when all its loaded members are evicted in the same subtree', () => {
+  const state = importText(initialState(), { text: '- cat\n  - cat' })
+  const parentId = contextToThought(state, ['cat'])!.id
+  const childId = contextToThought(state, ['cat', 'cat'])!.id
+  expect(getLexeme(state, 'cat')?.contexts).toEqual([parentId, childId])
+
+  const stateNew = deleteThought(state, {
+    pathParent: [HOME_TOKEN],
+    thoughtId: parentId,
+    local: false,
+    remote: false,
+  })
+  expect(getThoughtById(stateNew, parentId)).toBeUndefined()
+  expect(getThoughtById(stateNew, childId)).toBeUndefined()
+  expect(getLexeme(stateNew, 'cat')).toBeUndefined()
 })
 
 it('update cursor after thought deletion', () => {

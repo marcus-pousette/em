@@ -21,6 +21,8 @@ Thoughts live in `state.thoughts.thoughtIndex` (keyed by `ThoughtId`) and `state
 
 Thoughts that are known to exist but haven't been loaded yet are flagged with `pending: true` so the UI can render placeholder rows while the pull queue fetches them.
 
+For create, edit, and delete, Redux's [`updateThoughts`](../src/actions/updateThoughts.ts) derives optimistic lexeme memberships from the thought changes synchronously, preserving known contexts whose thoughts are not loaded. Callers can still supply explicit `lexemeIndexUpdates` for loading, undo, imports, and Favorites ordering. Cache eviction keeps a lexeme's complete membership list while any member remains loaded; it is not a document deletion. These UI updates are separate from the provider-owned persisted memberships below.
+
 ## Local persistence (TreeCRDT + SQLite)
 
 ### The TreeCRDT client
