@@ -1,4 +1,6 @@
 import deleteEmptyThought from '../../actions/deleteEmptyThought'
+import deleteThought from '../../actions/deleteThought'
+import importText from '../../actions/importText'
 import newSubthought from '../../actions/newSubthought'
 import newThought from '../../actions/newThought'
 import { HOME_TOKEN } from '../../constants'
@@ -6,6 +8,7 @@ import childIdsToThoughts from '../../selectors/childIdsToThoughts'
 import contextToThoughtId from '../../selectors/contextToThoughtId'
 import getLexeme from '../../selectors/getLexeme'
 import getThoughtById from '../../selectors/getThoughtById'
+import contextToThought from '../../test-helpers/contextToThought'
 import deleteThoughtAtFirstMatch from '../../test-helpers/deleteThoughtAtFirstMatch'
 import expectPathToEqual from '../../test-helpers/expectPathToEqual'
 import getAllChildrenByContext from '../../test-helpers/getAllChildrenByContext'
@@ -90,4 +93,23 @@ it('delete the intended empty thought when there are multiple', () => {
   const thoughtAfterDeletion = getThoughtById(stateAfterDeletion, thoughtIdToBeDeleted)
 
   expect(thoughtAfterDeletion).toBeUndefined()
+})
+
+it('keeps an outside context when deleting duplicate values in a subtree', () => {
+  const state = importText(initialState(), { text: '- branch\n  - cat\n    - cat\n- outside\n  - cat' })
+  const outsideCatId = contextToThought(state, ['outside', 'cat'])!.id
+
+  const stateNew = deleteThoughtAtFirstMatch(['branch'])(state)
+
+  expect(getLexeme(stateNew, 'branch')).toBeUndefined()
+  expect(getLexeme(stateNew, 'cat')?.contexts).toEqual([outsideCatId])
+})
+
+it('frees a Lexeme once every loaded context is freed', () => {
+  const state = importText(initialState(), { text: '- cat\n  - cat' })
+  const thoughtId = contextToThought(state, ['cat'])!.id
+
+  const stateNew = deleteThought(state, { pathParent: [HOME_TOKEN], thoughtId, local: false, remote: false })
+
+  expect(getLexeme(stateNew, 'cat')).toBeUndefined()
 })
