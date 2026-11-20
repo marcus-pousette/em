@@ -1,25 +1,21 @@
 import _ from 'lodash'
 import Index from '../@types/IndexType'
-import Lexeme from '../@types/Lexeme'
 import Path from '../@types/Path'
 import State from '../@types/State'
 import Thought from '../@types/Thought'
 import Thunk from '../@types/Thunk'
 import { HOME_TOKEN } from '../constants'
 import { clientId } from '../data-providers/thoughtspaceSession'
-import { getLexeme } from '../selectors/getLexeme'
 import getNextRank from '../selectors/getNextRank'
 import getThoughtById from '../selectors/getThoughtById'
 import { registerActionMetadata } from '../util/actionMetadata.registry'
 import appendToPath from '../util/appendToPath'
 import equalPath from '../util/equalPath'
-import hashThought from '../util/hashThought'
 import head from '../util/head'
 import keyValueBy from '../util/keyValueBy'
 import normalizeThought from '../util/normalizeThought'
 import parentOf from '../util/parentOf'
 import reducerFlow from '../util/reducerFlow'
-import removeContext from '../util/removeContext'
 import timestamp from '../util/timestamp'
 import moveThought from './moveThought'
 import updateThoughts from './updateThoughts'
@@ -82,8 +78,6 @@ const mergeThoughts = (
         console.warn(`Missing sourceParent${sourceParentId}. Aborting merge.`)
         return state
       }
-      const lexeme = getLexeme(state, sourceThought.value)
-      const key = hashThought(sourceThought.value)
       return reducerFlow([
         // remove child from the source parent without deleting the Thought itself
         updateThoughts({
@@ -95,12 +89,6 @@ const mergeThoughts = (
               ),
             },
           },
-          // update Lexeme
-          lexemeIndexUpdates: lexeme
-            ? {
-                [key]: removeContext(lexeme, sourceThought.id),
-              }
-            : {},
         }),
       ])(state)
     }
@@ -132,18 +120,6 @@ const mergeThoughts = (
           }
         : state,
   ])(state)
-
-  const lexemeKey = hashThought(sourceThought.value)
-
-  const lexeme = newStateAfterMove.thoughts.lexemeIndex[lexemeKey]
-
-  // remove source thought from the lexeme entry as its thought index entry will be deleted
-  const lexemeIndexUpdates: Index<Lexeme | null> = {
-    [lexemeKey]: {
-      ...lexeme,
-      contexts: lexeme.contexts.filter(thoughtId => thoughtId !== sourceThought.id),
-    },
-  }
 
   const sourceParentThoughtUpdated = getThoughtById(newStateAfterMove, sourceParentThought.id)
 
@@ -177,7 +153,6 @@ const mergeThoughts = (
 
   return updateThoughts(newStateAfterMove, {
     thoughtIndexUpdates,
-    lexemeIndexUpdates,
     preventExpandThoughts: true,
   })
 }

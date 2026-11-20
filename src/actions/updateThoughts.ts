@@ -1,4 +1,5 @@
 import _ from 'lodash'
+import Lexeme from '../@types/Lexeme'
 import Path from '../@types/Path'
 import PushBatch from '../@types/PushBatch'
 import RecentlyEditedTree from '../@types/RecentlyEditedTree'
@@ -13,12 +14,18 @@ import rootedParentOf from '../selectors/rootedParentOf'
 import simplifyPath from '../selectors/simplifyPath'
 import thoughtToPath from '../selectors/thoughtToPath'
 import { registerActionMetadata } from '../util/actionMetadata.registry'
+import addContext from '../util/addContext'
+import hashThought from '../util/hashThought'
 import head from '../util/head'
 import keyValueBy from '../util/keyValueBy'
 import mergeUpdates from '../util/mergeUpdates'
+import newLexeme from '../util/newLexeme'
 import reducerFlow from '../util/reducerFlow'
+import removeContext from '../util/removeContext'
 
-export type UpdateThoughtsOptions = PushBatch & {
+export type UpdateThoughtsOptions = Omit<PushBatch, 'lexemeIndexUpdates'> & {
+  /** Lexeme changes to apply as given. Without them, updateThoughts derives them from thoughtIndexUpdates. Loading, the readback and cache eviction pass their own, and {} applies none. */
+  lexemeIndexUpdates?: PushBatch['lexemeIndexUpdates']
   cursorOffset?: number
   // callback for when the updates have been synced with IDB
   idbSynced?: () => void
@@ -82,7 +89,7 @@ const updateThoughts = (
   {
     cursorOffset,
     favoriteOrder,
-    lexemeIndexUpdates,
+    lexemeIndexUpdates: explicitLexemeIndexUpdates,
     thoughtIndexUpdates,
     recentlyEdited,
     pendingDeletes,
@@ -96,7 +103,8 @@ const updateThoughts = (
     repairCursor,
   }: UpdateThoughtsOptions,
 ) => {
-  if (Object.keys(thoughtIndexUpdates).length === 0 && Object.keys(lexemeIndexUpdates).length === 0) return state
+  if (Object.keys(thoughtIndexUpdates).length === 0 && Object.keys(explicitLexemeIndexUpdates ?? {}).length === 0)
+    return state
 
   const thoughtIndexOld = { ...state.thoughts.thoughtIndex }
   const lexemeIndexOld = { ...state.thoughts.lexemeIndex }
@@ -135,6 +143,36 @@ const updateThoughts = (
 
   // TODO: Can we use { overwritePending: !local } and get rid of the overwritePending option to updateThoughts? i.e. Are there any false positives when local is false?
   const thoughtIndex = mergeUpdates(thoughtIndexOld, thoughtIndexUpdatesFresh, { overwritePending })
+
+  // A thought whose value changes moves from the Lexeme of its old value to the Lexeme of its new value. Contexts whose
+  // thoughts are not loaded stay, and a Lexeme left with no contexts is deleted. An added context goes at the end, so
+  // the order can differ from the provider's until the readback replaces the Lexeme.
+  const lexemeIndexUpdates =
+    explicitLexemeIndexUpdates ??
+    keyValueBy<Thought | null, Lexeme | null>(thoughtIndexUpdatesFresh, (id, thought, updates) => {
+      const thoughtOld = thoughtIndexOld[id]
+      const keyOld = thoughtOld ? hashThought(thoughtOld.value) : null
+      const keyNew = thought ? hashThought(thought.value) : null
+      if (keyOld === keyNew) return null
+
+      // An earlier thought in the batch may already have changed one of these Lexemes.
+      const lexemeOld = keyOld && (keyOld in updates ? updates[keyOld] : lexemeIndexOld[keyOld])
+      const lexemeNew = keyNew && (keyNew in updates ? updates[keyNew] : lexemeIndexOld[keyNew])
+      const lexemeOldWithout = lexemeOld && removeContext(lexemeOld, id)
+
+      return {
+        ...(keyOld && lexemeOldWithout
+          ? { [keyOld]: lexemeOldWithout.contexts.length > 0 ? lexemeOldWithout : null }
+          : null),
+        ...(keyNew && thought
+          ? {
+              [keyNew]: lexemeNew
+                ? addContext(lexemeNew, { id: thought.id })
+                : newLexeme({ id: thought.id, value: thought.value }),
+            }
+          : null),
+      }
+    })
   const lexemeIndex = mergeUpdates(lexemeIndexOld, lexemeIndexUpdates, { overwritePending })
 
   const recentlyEditedNew = recentlyEdited || state.recentlyEdited
