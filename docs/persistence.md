@@ -21,6 +21,8 @@ Thoughts live in `state.thoughts.thoughtIndex` (keyed by `ThoughtId`) and `state
 
 Thoughts that are known to exist but haven't been loaded yet are flagged with `pending: true` so the UI can render placeholder rows while the pull queue fetches them.
 
+Actions and undo don't write Lexemes. [`updateThoughts`](../src/actions/updateThoughts.ts) moves each thought whose value changes from the Lexeme of its old value to the Lexeme of its new value, keeping contexts whose thoughts aren't loaded. Loading, the readback and cache eviction pass their own Lexeme updates instead. Freeing a thought keeps its Lexeme whole while any of its contexts is loaded. These Redux Lexemes are a preview; the provider owns the persisted memberships (see below).
+
 ## Local persistence (TreeCRDT + SQLite)
 
 ### The TreeCRDT client

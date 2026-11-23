@@ -1,3 +1,4 @@
+import deleteThought from '../../actions/deleteThought'
 import importText from '../../actions/importText'
 import newSubthought from '../../actions/newSubthought'
 import newThought from '../../actions/newThought'
@@ -8,6 +9,7 @@ import getContexts from '../../selectors/getContexts'
 import getLexeme from '../../selectors/getLexeme'
 import parentOfThought from '../../selectors/parentOfThought'
 import contextToThought from '../../test-helpers/contextToThought'
+import deleteThoughtAtFirstMatch from '../../test-helpers/deleteThoughtAtFirstMatch'
 import editThought from '../../test-helpers/editThoughtByContext'
 import expectPathToEqual from '../../test-helpers/expectPathToEqual'
 import getAllChildrenAsThoughtsByContext from '../../test-helpers/getAllChildrenAsThoughtsByContext'
@@ -15,6 +17,7 @@ import getAllChildrenByContext from '../../test-helpers/getAllChildrenByContext'
 import newThoughtAtFirstMatch from '../../test-helpers/newThoughtAtFirstMatch'
 import setCursor from '../../test-helpers/setCursorFirstMatch'
 import { compareThought } from '../../util/compareThought'
+import hashThought from '../../util/hashThought'
 import initialState from '../../util/initialState'
 import reducerFlow from '../../util/reducerFlow'
 
@@ -583,4 +586,34 @@ describe('metaprogramming attributes', () => {
     - =favorite`)
     expectPathToEqual(stateNew, stateNew.cursor, ['aaa', '=favorite'])
   })
+})
+
+it('keeps the Lexeme when an edit keeps its hash', () => {
+  const state = importText(initialState(), { text: '- cats\n- cat' })
+  expect(hashThought('cats')).toBe(hashThought('CAT'))
+
+  const stateNew = editThought(['cats'], 'CAT')(state)
+
+  expect(getLexeme(stateNew, 'cat')).toEqual(getLexeme(state, 'cat'))
+})
+
+it('keeps the contexts of unloaded thoughts when thoughts are created, edited, and deleted', () => {
+  const state = importText(initialState(), { text: '- hidden\n  - cat\n- visible\n  - cat\n- other\n  - dog' })
+  const hiddenId = contextToThought(state, ['hidden'])!.id
+  const hiddenCatId = contextToThought(state, ['hidden', 'cat'])!.id
+  const visibleCatId = contextToThought(state, ['visible', 'cat'])!.id
+  const dogId = contextToThought(state, ['other', 'dog'])!.id
+  const freed = deleteThought(state, { pathParent: [hiddenId], thoughtId: hiddenCatId, local: false, remote: false })
+  expect(getLexeme(freed, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId])
+
+  const created = newThoughtAtFirstMatch({ at: ['visible'], value: 'cats', insertNewSubthought: true })(freed)
+  const createdId = contextToThought(created, ['visible', 'cats'])!.id
+  expect(getLexeme(created, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId, createdId])
+
+  const edited = editThought(['other', 'dog'], 'CAT')(created)
+  expect(getLexeme(edited, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId, createdId, dogId])
+  expect(getLexeme(edited, 'dog')).toBeUndefined()
+
+  const deleted = deleteThoughtAtFirstMatch(['visible', 'cats'])(edited)
+  expect(getLexeme(deleted, 'cat')?.contexts).toEqual([hiddenCatId, visibleCatId, dogId])
 })
