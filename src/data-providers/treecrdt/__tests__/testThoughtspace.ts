@@ -3,7 +3,15 @@ import { VIEW_NODE_PREFIX } from '@treecrdt/interface/views'
 import { type TreecrdtClient, createTreecrdtClient } from '@treecrdt/wa-sqlite'
 import type ThoughtId from '../../../@types/ThoughtId'
 import type Timestamp from '../../../@types/Timestamp'
-import { EM_TOKEN, ROOT_PARENT_ID, SETTINGS_TOKEN, SETTINGS_VALUE } from '../../../constants'
+import {
+  ABSOLUTE_TOKEN,
+  EM_TOKEN,
+  GLOBAL_ROOT_TOKEN,
+  HOME_TOKEN,
+  ROOT_PARENT_ID,
+  SETTINGS_TOKEN,
+  SETTINGS_VALUE,
+} from '../../../constants'
 import hashThought from '../../../util/hashThought'
 import type { DataProvider } from '../../DataProvider'
 import { encodeThoughtPayload } from '../payload'
@@ -129,6 +137,12 @@ it('seeds fixed system thoughts in the TreeCRDT provider', async () => {
 
   const settingsLexeme = await treecrdtThoughtspace.getLexemeById(hashThought(SETTINGS_VALUE))
   expect(settingsLexeme?.contexts).toEqual([SETTINGS_TOKEN])
+
+  // Root payloads carry no Lexeme key.
+  const roots = [GLOBAL_ROOT_TOKEN, HOME_TOKEN, EM_TOKEN, ABSOLUTE_TOKEN]
+  await expect(treecrdtThoughtspace.getLexemesByIds(roots.map(hashThought))).resolves.toEqual(
+    roots.map(() => undefined),
+  )
 })
 
 it('does not write seed operations again when binding a seeded client', async () => {
@@ -301,14 +315,15 @@ it('keeps separately created thoughtspace instances isolated', async () => {
   }
 })
 
-it('skips a thought the Lexeme index cannot read and keeps indexing later thoughts', async () => {
+it('keeps a payload that is not a thought out of Lexemes and indexes later thoughts', async () => {
   const report = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   const client = await createTreecrdtClient({ docId: 'undecodable-payload' })
   const replica = new Uint8Array(32).fill(1)
   try {
     const provider = createTreecrdtDataProvider()
     const close = await provider.bindClient(client, replica)
-    // A peer's payload that is not a thought (corrupt, or not decryptable on this device yet) joins no Lexeme.
+    // A peer's payload that is not a thought (corrupt, or not decryptable on this device yet) has no Lexeme key, so it
+    // joins no Lexeme, and neither its write nor a later one fails.
     await client.local.insert(
       new Uint8Array(32).fill(2),
       client.tree.root.id,
@@ -316,15 +331,11 @@ it('skips a thought the Lexeme index cannot read and keeps indexing later though
       { type: 'last' },
       new TextEncoder().encode('not json'),
     )
-    const later = encodeThoughtPayload({ value: 'later', created: 1, lastUpdated: 1, updatedBy: 'test' })
+    const later = encodeThoughtPayload(THOUGHT_Y_ID, { value: 'later', created: 1, lastUpdated: 1, updatedBy: 'test' })
     await client.local.insert(replica, client.tree.root.id, THOUGHT_Y_ID, { type: 'last' }, later)
 
     await expect(provider.db.getLexemeById(hashThought('later'))).resolves.toMatchObject({ contexts: [THOUGHT_Y_ID] })
-    expect(report).toHaveBeenCalledWith(
-      'TreeCRDT derived indexing skipped a thought',
-      THOUGHT_X_ID,
-      expect.any(SyntaxError),
-    )
+    expect(report).not.toHaveBeenCalled()
     await close()
   } finally {
     report.mockRestore()

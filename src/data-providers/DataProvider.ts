@@ -15,7 +15,7 @@ export interface DataProvider {
   updateThoughts: (args: {
     thoughtIndexUpdates: Index<Thought | null>
     movePlacements?: Index<ThoughtId | null>
-    /** Explicit Favorites ordering preference, independent of derived membership. */
+    /** Explicit Favorites ordering preference, independent of Lexeme membership. */
     favoriteOrder?: ThoughtId[]
     /** A Favorites drag: the =favorite child that moved and the one it was dropped before (null: last). */
     favoriteMove?: { id: ThoughtId; before: ThoughtId | null }

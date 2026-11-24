@@ -145,7 +145,7 @@ const updateThoughtsForClient = async (
 
   for (const [id, thought] of Object.entries(updates)) {
     const thoughtId = id as ThoughtId
-    const payloadBytes = encodeThoughtPayload({
+    const payloadBytes = encodeThoughtPayload(thoughtId, {
       value: thought.value,
       created: thought.created,
       lastUpdated: thought.lastUpdated,
@@ -206,7 +206,7 @@ const updateThoughtsForClient = async (
   return ops
 }
 
-const ROOT_PAYLOAD = encodeThoughtPayload({
+const ROOT_PAYLOAD = encodeThoughtPayload(GLOBAL_ROOT_TOKEN, {
   value: GLOBAL_ROOT_TOKEN,
   created: 0,
   lastUpdated: 0,
@@ -227,7 +227,7 @@ const initializeThoughtspaceStorage = async (client: TreecrdtClient, replicaId: 
         GLOBAL_ROOT_TOKEN,
         id,
         { type: 'last' },
-        encodeThoughtPayload({
+        encodeThoughtPayload(id, {
           value: id,
           created: now,
           lastUpdated: now,
@@ -251,7 +251,7 @@ const initializeThoughtspaceStorage = async (client: TreecrdtClient, replicaId: 
     EM_TOKEN,
     SETTINGS_TOKEN,
     { type: 'last' },
-    encodeThoughtPayload({
+    encodeThoughtPayload(SETTINGS_TOKEN, {
       value: SETTINGS_VALUE,
       created: now,
       lastUpdated: now,
@@ -309,18 +309,21 @@ const createTreecrdtDataProvider = () => {
     if (activeDb) throw new Error('TreeCRDT DataProvider: client already bound')
     await initializeThoughtspaceStorage(client, replicaId)
 
-    // Lexemes are a TreeCRDT view: TreeCRDT remembers how far its index got and catches it up after a gap such as
-    // startup. The startup catch-up runs before `publish` is set and publishes nothing; Redux loads lexemes on demand.
+    // Lexemes are a TreeCRDT view over the Lexeme key of each payload, which SQLite indexes in the write itself, so
+    // nothing catches up at startup; Redux loads lexemes on demand. onChange names the Lexemes each event changed, the
+    // one a renamed thought left included.
     let publish: ((event: MaterializationEvent, keys: string[]) => void) | undefined
     const lexemes = await createLexemeIndex(client, replicaId)
-    const indexes = lexemes.view.subscription
     lexemes.view.onChange((keys, event) => publish?.(event, keys))
 
     const clientDb: TreecrdtClientDataProvider = {
       getLexemeById: async key => (await clientDb.getLexemesByIds([key]))[0],
       getLexemesByIds: async keys => {
-        await indexes.idle()
-        return lexemes.getLexemesByIds(keys)
+        const values = await lexemes.getLexemesByIds(keys)
+        // A read sees every write SQLite has run, while the view names a write's Lexemes a query after its event.
+        // Waiting for the view means a publication round knows of every event its read reflects.
+        await lexemes.view.idle()
+        return values
       },
       getThoughtById: async id => (await readThoughts(client, [id]))[0],
       getThoughtsByIds: async ids => {
@@ -348,9 +351,10 @@ const createTreecrdtDataProvider = () => {
       },
     }
 
-    // A publication is queued only once its event is indexed, so the idle barrier waits for the indexes too.
+    // A publication is queued only once the view has named its event's Lexemes, so the idle barrier waits for the view
+    // too.
     const unsubscribeMaterialized = client.onMaterialized(
-      () => void enqueueMaterializedThoughtsToStoreWork(() => indexes.idle()),
+      () => void enqueueMaterializedThoughtsToStoreWork(() => lexemes.view.idle()),
     )
     if (materialization) {
       const context: MaterializationContext = {
@@ -372,7 +376,7 @@ const createTreecrdtDataProvider = () => {
     providerReadiness.resolve(clientDb)
     return async () => {
       unsubscribeMaterialized()
-      await indexes.close()
+      await lexemes.view.close()
     }
   }
 

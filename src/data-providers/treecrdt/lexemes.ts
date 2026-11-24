@@ -4,13 +4,10 @@ import type { TreecrdtClient } from '@treecrdt/wa-sqlite'
 import type Lexeme from '../../@types/Lexeme'
 import type ThoughtId from '../../@types/ThoughtId'
 import type Timestamp from '../../@types/Timestamp'
-import { GLOBAL_ROOT_TOKEN } from '../../constants'
 import hashThought from '../../util/hashThought'
-import { decodeThoughtPayload } from './payload'
-import { SYSTEM_ROOT_THOUGHT_IDS } from './systemThoughtIds'
+import { LEXEME_PATH, decodeThoughtPayload } from './payload'
 import { createTreecrdtLocalWriteOptions } from './writeBarrier'
 
-const ROOT_IDS = new Set<string>([GLOBAL_ROOT_TOKEN, ...SYSTEM_ROOT_THOUGHT_IDS])
 const FAVORITES = hashThought('=favorite')
 
 type Metadata = Pick<Lexeme, 'created' | 'lastUpdated' | 'updatedBy'>
@@ -36,19 +33,19 @@ const longestIncreasing = (positions: number[]): Set<number> => {
 }
 
 /**
- * Lexemes are a TreeCRDT view. Membership is derived from each thought's value on this device and is never written as
- * operations. Unordered Lexemes list their contexts by created time. The first drag orders a Lexeme: it becomes a
- * subtree of the document, with a reference node per context's parent that is ordered like any thought.
+ * Lexemes are a TreeCRDT view whose groups are the Lexeme keys in thought payloads. SQLite indexes the key in the write
+ * that sets the value, so a Lexeme always matches the values and nothing derives or stores its contexts. Unordered
+ * Lexemes list their contexts by created time. The first drag orders a Lexeme: it becomes a subtree of the document,
+ * with a reference node per context's parent that is ordered like any thought.
  */
 const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) => {
   const view = await createTreecrdtView(client, {
     name: 'em-lexemes',
-    version: 1,
+    index: { name: 'em_lexemes', path: LEXEME_PATH },
     replica,
     // A Favorites reference is the favorited thought, so a thought favorited again keeps its place.
     reference: 'parent',
-    keys: ({ id, payload }) => (ROOT_IDS.has(id) ? [] : [hashThought(decodeThoughtPayload(payload).value)]),
-    // The view clamps the rank, so an odd created time (a pasted Roam create-time, say) cannot stall indexing.
+    // The view clamps the rank, so an odd created time (a pasted Roam create-time, say) still lists.
     rank: ({ payload }) => Number(decodeThoughtPayload(payload).created),
     data: ({ payload }): Metadata => {
       const { created, lastUpdated, updatedBy } = decodeThoughtPayload(payload)
@@ -56,7 +53,7 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
     },
     // Tag the view's writes like the app's other writes, so the readback treats them as local.
     writeOptions: createTreecrdtLocalWriteOptions,
-    onError: (error, node) => console.error('TreeCRDT derived indexing skipped a thought', node, error),
+    onError: (error, node) => console.error('TreeCRDT Lexeme view skipped a thought', node, error),
   })
 
   /** Assembles Lexemes in display order, preserving requested key order. */
@@ -98,7 +95,6 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
    * know the drag should use moveFavorite: a list read from a stale order moves members nobody dragged.
    */
   const setFavoriteOrder = async (contexts: ThoughtId[]): Promise<Operation[]> => {
-    await view.subscription.settled()
     const current = ((await view.members([FAVORITES])).get(FAVORITES) ?? []).map(member => member.id)
     const position = new Map(current.map((id, i) => [id, i]))
     // Members the caller did not list keep their relative order after the listed ones.
