@@ -1,5 +1,6 @@
 import type { Operation } from '@treecrdt/interface'
 import type { MaterializationEvent, TreecrdtReadNode, TreecrdtReadResult } from '@treecrdt/interface/engine'
+import { VIEW_NODE_PREFIX } from '@treecrdt/interface/views'
 import type { TreecrdtClient } from '@treecrdt/wa-sqlite'
 import type Index from '../../@types/IndexType'
 import type Thought from '../../@types/Thought'
@@ -57,6 +58,8 @@ const readThoughts = async (client: TreecrdtClient, ids: ThoughtId[]): Promise<(
     const payload = decodeThoughtPayload(node.payload)
     const childrenMap: Index<ThoughtId> = {}
     for (const child of node.children) {
+      // The Lexeme view keeps its order records under a hidden node of the TreeCRDT root.
+      if (child.id.startsWith(VIEW_NODE_PREFIX)) continue
       const childId = child.id as ThoughtId
       const value = child.payload && decodeThoughtPayload(child.payload).value
       childrenMap[value ? childrenMapKey(childrenMap, { id: childId, value }) : childId] = childId
@@ -258,9 +261,6 @@ const initializeThoughtspaceStorage = async (client: TreecrdtClient, replicaId: 
   )
 }
 
-/** Bump when an index is added or changes, so databases indexed by an older version are rebuilt once. */
-const INDEX_VERSION = 2
-
 /**
  * Creates the stable app-facing TreeCRDT data provider.
  *
@@ -309,22 +309,12 @@ const createTreecrdtDataProvider = () => {
     if (activeDb) throw new Error('TreeCRDT DataProvider: client already bound')
     await initializeThoughtspaceStorage(client, replicaId)
 
-    // TreeCRDT remembers how far the derived indexes got and catches them up after a gap such as startup or a failed
-    // update. The startup catch-up runs before `publish` is set and publishes nothing; Redux loads lexemes on demand.
+    // Lexemes are a TreeCRDT view: TreeCRDT remembers how far its index got and catches it up after a gap such as
+    // startup. The startup catch-up runs before `publish` is set and publishes nothing; Redux loads lexemes on demand.
     let publish: ((event: MaterializationEvent, keys: string[]) => void) | undefined
-    const lexemes = await createLexemeIndex(client)
-    const indexes = await client.onMaterializedDurable(
-      'em-derived-indexes',
-      async event => {
-        const keys = await lexemes.applyChanges(event.changes)
-        publish?.(event, keys)
-      },
-      {
-        version: INDEX_VERSION,
-        reset: lexemes.clear,
-        onError: err => console.error('TreeCRDT derived indexing failed', err),
-      },
-    )
+    const lexemes = await createLexemeIndex(client, replicaId)
+    const indexes = lexemes.view.subscription
+    lexemes.view.onChange((keys, event) => publish?.(event, keys))
 
     const clientDb: TreecrdtClientDataProvider = {
       getLexemeById: async key => (await clientDb.getLexemesByIds([key]))[0],
@@ -338,8 +328,14 @@ const createTreecrdtDataProvider = () => {
         return readThoughts(client, ids)
       },
       updateThoughts: async updates => {
-        if (updates.favoriteOrder) await lexemes.setFavoriteOrder(updates.favoriteOrder)
-        return updateThoughtsForClient(client, replicaId, updates)
+        // Order records are ops like any other write: return them so sync pushes them.
+        const orderOps = updates.favoriteMove
+          ? await lexemes.moveFavorite(updates.favoriteMove.id, updates.favoriteMove.before)
+          : updates.favoriteOrder
+            ? await lexemes.setFavoriteOrder(updates.favoriteOrder)
+            : []
+        const ops = await updateThoughtsForClient(client, replicaId, updates)
+        return orderOps.length ? [...orderOps, ...ops] : ops
       },
     }
 

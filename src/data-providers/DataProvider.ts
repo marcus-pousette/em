@@ -17,6 +17,8 @@ export interface DataProvider {
     movePlacements?: Index<ThoughtId | null>
     /** Explicit Favorites ordering preference, independent of derived membership. */
     favoriteOrder?: ThoughtId[]
+    /** A Favorites drag: the =favorite child that moved and the one it was dropped before (null: last). */
+    favoriteMove?: { id: ThoughtId; before: ThoughtId | null }
   }) => Promise<unknown>
   freeThought: (id: ThoughtId) => Promise<void>
   freeLexeme: (key: string) => Promise<void>

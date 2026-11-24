@@ -247,34 +247,104 @@ it('keeps separately created thoughtspace instances isolated', async () => {
   }
 })
 
-it('derives memberships from existing thoughts and preserves the saved order of live favorites on upgrade', async () => {
-  const client = await createTreecrdtClient({ docId: 'upgrade-favorites' })
-  const replicaId = new Uint8Array(32).fill(1)
+it('skips a thought the Lexeme index cannot read and keeps indexing later thoughts', async () => {
+  const report = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  const client = await createTreecrdtClient({ docId: 'undecodable-payload' })
+  const replica = new Uint8Array(32).fill(1)
   try {
-    const older = await client.onMaterializedDurable('em-derived-indexes', () => undefined, { version: 1 })
-    const payload = encodeThoughtPayload({ value: '=favorite', created: 1, lastUpdated: 1, updatedBy: 'test' })
-    await client.local.insert(replicaId, client.tree.root.id, THOUGHT_B_ID, { type: 'last' }, payload)
-    await client.local.insert(replicaId, client.tree.root.id, THOUGHT_Y_ID, { type: 'last' }, payload)
-    await older.close()
-    // The old cache contains a stale member and explicitly orders B before Y (the reverse of their id order).
-    await client.runner.exec('CREATE TABLE em_lexemes (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL)')
-    await client.runner.run('INSERT INTO em_lexemes VALUES (?1, ?2)', [
-      hashThought('=favorite'),
-      JSON.stringify({
-        contexts: [THOUGHT_B_ID, THOUGHT_X_ID, THOUGHT_Y_ID],
-        created: 1,
-        lastUpdated: 1,
-        updatedBy: 'test',
-      }),
-    ])
-
     const provider = createTreecrdtDataProvider()
-    const close = await provider.bindClient(client, replicaId)
-    await expect(provider.db.getLexemeById(hashThought('=favorite'))).resolves.toMatchObject({
-      contexts: [THOUGHT_B_ID, THOUGHT_Y_ID],
-    })
+    const close = await provider.bindClient(client, replica)
+    // A peer's payload that is not a thought (corrupt, or not decryptable on this device yet) joins no Lexeme.
+    await client.local.insert(
+      new Uint8Array(32).fill(2),
+      client.tree.root.id,
+      THOUGHT_X_ID,
+      { type: 'last' },
+      new TextEncoder().encode('not json'),
+    )
+    const later = encodeThoughtPayload({ value: 'later', created: 1, lastUpdated: 1, updatedBy: 'test' })
+    await client.local.insert(replica, client.tree.root.id, THOUGHT_Y_ID, { type: 'last' }, later)
+
+    await expect(provider.db.getLexemeById(hashThought('later'))).resolves.toMatchObject({ contexts: [THOUGHT_Y_ID] })
+    expect(report).toHaveBeenCalledWith(
+      'TreeCRDT derived indexing skipped a thought',
+      THOUGHT_X_ID,
+      expect.any(SyntaxError),
+    )
     await close()
   } finally {
+    report.mockRestore()
     await client.drop()
+  }
+})
+
+it('syncs the Favorites order between devices, writing one record per moved favorite', async () => {
+  const [a, b] = [
+    await createTreecrdtClient({ docId: 'favorites-sync' }),
+    await createTreecrdtClient({ docId: 'favorites-sync' }),
+  ]
+  const [replicaA, replicaB] = [new Uint8Array(32).fill(1), new Uint8Array(32).fill(2)]
+  const closers: (() => Promise<void>)[] = []
+  try {
+    // A favorite is a =favorite child; the Lexeme lists those children, and the panel shows their parents.
+    for (const [id, created] of [
+      [THOUGHT_A_ID, 1],
+      [THOUGHT_B_ID, 2],
+      [THOUGHT_X_ID, 3],
+    ] as const) {
+      const payload = encodeThoughtPayload({ value: '=favorite', created, lastUpdated: created, updatedBy: 'test' })
+      await a.local.insert(replicaA, a.tree.root.id, id, { type: 'last' }, payload)
+    }
+    const [providerA, providerB] = [createTreecrdtDataProvider(), createTreecrdtDataProvider()]
+    closers.push(await providerA.bindClient(a, replicaA), await providerB.bindClient(b, replicaB))
+    /** Gives each device every op the other has. */
+    const sync = async () => {
+      await b.ops.appendMany(await a.ops.all())
+      await a.ops.appendMany(await b.ops.all())
+    }
+    /** The Favorites Lexeme as the given device reads it. */
+    const favorites = (provider: typeof providerA) => provider.db.getLexemeById(hashThought('=favorite'))
+    await sync()
+    await expect(favorites(providerB)).resolves.toMatchObject({ contexts: [THOUGHT_A_ID, THOUGHT_B_ID, THOUGHT_X_ID] })
+
+    // A drags X to the top: one record, plus the view's root and group nodes the first time. The ops are returned, so
+    // live sync pushes them.
+    const opsA = (await a.ops.all()).length
+    const returned = await providerA.db.updateThoughts({
+      thoughtIndexUpdates: {},
+      favoriteMove: { id: THOUGHT_X_ID, before: THOUGHT_A_ID },
+    })
+    expect((await a.ops.all()).length - opsA).toBe(3)
+    expect(returned).toHaveLength(3)
+    await expect(favorites(providerA)).resolves.toMatchObject({ contexts: [THOUGHT_X_ID, THOUGHT_A_ID, THOUGHT_B_ID] })
+    await sync()
+    await expect(favorites(providerB)).resolves.toMatchObject({ contexts: [THOUGHT_X_ID, THOUGHT_A_ID, THOUGHT_B_ID] })
+
+    // B drags A to the end: one record.
+    const opsB = (await b.ops.all()).length
+    await providerB.db.updateThoughts({ thoughtIndexUpdates: {}, favoriteMove: { id: THOUGHT_A_ID, before: null } })
+    expect((await b.ops.all()).length - opsB).toBe(1)
+
+    // Before syncing, A (still showing X, A, B) drags B to the top. Only B moves: A keeps B's placement at the end.
+    await providerA.db.updateThoughts({
+      thoughtIndexUpdates: {},
+      favoriteMove: { id: THOUGHT_B_ID, before: THOUGHT_X_ID },
+    })
+    await sync()
+    await expect(favorites(providerA)).resolves.toMatchObject({ contexts: [THOUGHT_B_ID, THOUGHT_X_ID, THOUGHT_A_ID] })
+    await expect(favorites(providerB)).resolves.toMatchObject({ contexts: [THOUGHT_B_ID, THOUGHT_X_ID, THOUGHT_A_ID] })
+
+    // A new device that receives everything shows the same order and writes nothing of its own.
+    const c = await createTreecrdtClient({ docId: 'favorites-sync' })
+    closers.push(() => c.drop())
+    await c.ops.appendMany(await a.ops.all())
+    const providerC = createTreecrdtDataProvider()
+    closers.push(await providerC.bindClient(c, new Uint8Array(32).fill(3)))
+    await expect(favorites(providerC)).resolves.toMatchObject({ contexts: [THOUGHT_B_ID, THOUGHT_X_ID, THOUGHT_A_ID] })
+    expect((await c.ops.all()).length).toBe((await a.ops.all()).length)
+  } finally {
+    for (const close of closers.reverse()) await close()
+    await a.drop()
+    await b.drop()
   }
 })

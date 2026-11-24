@@ -181,15 +181,3 @@ it('updates stored memberships on incoming deletion even when its thought was no
   // No deleted thought is loaded back into the view.
   expect(snapshot.thoughtIndex[THOUGHT_ID]).toBeNull()
 })
-
-it('publishes nothing for an event that fails to index', async () => {
-  const report = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-  // A membership needs the payload's timestamps, so indexing this insert fails.
-  const brokenId = '00000000000000000000000000000203' as ThoughtId
-  const payload = new TextEncoder().encode(JSON.stringify({ value: 'x' }))
-  await client.local.insert(new Uint8Array(32).fill(2), EM_TOKEN, brokenId, { type: 'last' }, payload)
-  await waitForMaterializedThoughtsToStore()
-
-  expect(apply).not.toHaveBeenCalled()
-  report.mockRestore()
-})

@@ -8,6 +8,8 @@ import ThoughtId from './ThoughtId'
 interface PushBatch {
   /** Explicit Favorites ordering preference; never determines lexeme membership. */
   favoriteOrder?: ThoughtId[]
+  /** A Favorites drag: the =favorite child that moved and the one it was dropped before (null: last). */
+  favoriteMove?: { id: ThoughtId; before: ThoughtId | null }
   /** Callback invoked after provider persistence has completed. */
   idbSynced?: () => void
   lexemeIndexUpdates: Index<Lexeme | null>

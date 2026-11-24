@@ -1,4 +1,5 @@
 import type { MaterializationEvent } from '@treecrdt/interface/engine'
+import { VIEW_NODE_PREFIX } from '@treecrdt/interface/views'
 import _ from 'lodash'
 import hashThought from '../../../util/hashThought'
 import type { DataProvider } from '../../DataProvider'
@@ -22,7 +23,12 @@ export const applyMaterializedThoughtsToStore = async ({ bridge, db, pending, is
     await waitForQueuedTreecrdtWrites()
     const entries = pending.slice()
     const keys = [...new Set(entries.flatMap(entry => entry.keys))]
-    const remoteChanges = entries.flatMap(({ event }) => (isTreecrdtLocalMaterialization(event) ? [] : event.changes))
+    const remoteChanges = entries.flatMap(({ event }) =>
+      isTreecrdtLocalMaterialization(event)
+        ? []
+        : // Lexeme order records are not thoughts; their Lexeme is republished through `keys`.
+          event.changes.filter(change => !change.node.startsWith(VIEW_NODE_PREFIX)),
+    )
     const thoughtIndexUpdates = await refreshThoughtsFromMaterializationChanges(remoteChanges, db)
     const values = await db.getLexemesByIds(keys)
     const { thoughtIndex, lexemeIndex } = bridge.getSnapshot()
