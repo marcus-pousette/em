@@ -58,7 +58,7 @@ const readThoughts = async (client: TreecrdtClient, ids: ThoughtId[]): Promise<(
     const payload = decodeThoughtPayload(node.payload)
     const childrenMap: Index<ThoughtId> = {}
     for (const child of node.children) {
-      // The Lexeme view keeps its order records under a hidden node of the TreeCRDT root.
+      // The Lexeme view keeps the references and folders of ordered Lexemes under a node of the TreeCRDT root.
       if (child.id.startsWith(VIEW_NODE_PREFIX)) continue
       const childId = child.id as ThoughtId
       const value = child.payload && decodeThoughtPayload(child.payload).value
@@ -328,14 +328,23 @@ const createTreecrdtDataProvider = () => {
         return readThoughts(client, ids)
       },
       updateThoughts: async updates => {
-        // Order records are ops like any other write: return them so sync pushes them.
+        // View writes are ops like any other write: return them so sync pushes them.
         const orderOps = updates.favoriteMove
           ? await lexemes.moveFavorite(updates.favoriteMove.id, updates.favoriteMove.before)
           : updates.favoriteOrder
             ? await lexemes.setFavoriteOrder(updates.favoriteOrder)
             : []
         const ops = await updateThoughtsForClient(client, replicaId, updates)
-        return orderOps.length ? [...orderOps, ...ops] : ops
+        // A thought these writes add to an ordered Lexeme, such as a new favorite, gets its reference where it lists. A
+        // failed repair is retried after the next write, and must not keep this batch's ops from being pushed.
+        const repairOps =
+          ops.length > 0
+            ? await lexemes.repair().catch(err => {
+                console.error('TreeCRDT Lexeme repair failed', err)
+                return []
+              })
+            : []
+        return [...orderOps, ...ops, ...repairOps]
       },
     }
 

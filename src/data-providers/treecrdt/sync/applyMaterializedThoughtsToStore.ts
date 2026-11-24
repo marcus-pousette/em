@@ -26,7 +26,7 @@ export const applyMaterializedThoughtsToStore = async ({ bridge, db, pending, is
     const remoteChanges = entries.flatMap(({ event }) =>
       isTreecrdtLocalMaterialization(event)
         ? []
-        : // Lexeme order records are not thoughts; their Lexeme is republished through `keys`.
+        : // View nodes (references and folders) are not thoughts; their Lexeme is republished through `keys`.
           event.changes.filter(change => !change.node.startsWith(VIEW_NODE_PREFIX)),
     )
     const thoughtIndexUpdates = await refreshThoughtsFromMaterializationChanges(remoteChanges, db)

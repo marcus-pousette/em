@@ -37,13 +37,16 @@ const longestIncreasing = (positions: number[]): Set<number> => {
 
 /**
  * Lexemes are a TreeCRDT view. Membership is derived from each thought's value on this device and is never written as
- * operations. Order is replicated: a member the user placed has one record in TreeCRDT, the rest sort by created time.
+ * operations. Unordered Lexemes list their contexts by created time. The first drag orders a Lexeme: it becomes a
+ * subtree of the document, with a reference node per context's parent that is ordered like any thought.
  */
 const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) => {
   const view = await createTreecrdtView(client, {
     name: 'em-lexemes',
     version: 1,
     replica,
+    // A Favorites reference is the favorited thought, so a thought favorited again keeps its place.
+    reference: 'parent',
     keys: ({ id, payload }) => (ROOT_IDS.has(id) ? [] : [hashThought(decodeThoughtPayload(payload).value)]),
     // The view clamps the rank, so an odd created time (a pasted Roam create-time, say) cannot stall indexing.
     rank: ({ payload }) => Number(decodeThoughtPayload(payload).created),
@@ -51,7 +54,7 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
       const { created, lastUpdated, updatedBy } = decodeThoughtPayload(payload)
       return { created: created as Timestamp, lastUpdated: lastUpdated as Timestamp, updatedBy }
     },
-    // Tag order writes like the app's other writes, so the readback treats them as local.
+    // Tag the view's writes like the app's other writes, so the readback treats them as local.
     writeOptions: createTreecrdtLocalWriteOptions,
     onError: (error, node) => console.error('TreeCRDT derived indexing skipped a thought', node, error),
   })
@@ -86,14 +89,13 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
     })
   }
 
-  /** A Favorites drag: one record for the moved favorite. */
+  /** A Favorites drag. The first one orders Favorites, pinning every favorite where it shows. */
   const moveFavorite = (id: ThoughtId, before: ThoughtId | null): Promise<Operation[]> =>
-    view.place(FAVORITES, id, before)
+    view.place(FAVORITES, id, { before })
 
   /**
-   * Writes a record for each member that the requested Favorites order moves, and none for the members it keeps in
-   * place. Callers that know the drag should use moveFavorite: a list read from a stale order moves members nobody
-   * dragged.
+   * Moves each member that the requested Favorites order moves, and none of the members it keeps in place. Callers that
+   * know the drag should use moveFavorite: a list read from a stale order moves members nobody dragged.
    */
   const setFavoriteOrder = async (contexts: ThoughtId[]): Promise<Operation[]> => {
     await view.subscription.settled()
@@ -111,12 +113,18 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
       const live = new Set(((await view.members([FAVORITES])).get(FAVORITES) ?? []).map(member => member.id))
       if (!live.has(wanted[i])) continue
       const before = wanted.slice(i + 1).find(id => live.has(id)) ?? null
-      ops.push(...(await view.place(FAVORITES, wanted[i], before)))
+      ops.push(...(await view.place(FAVORITES, wanted[i], { before })))
     }
     return ops
   }
 
-  return { view, getLexemesByIds, moveFavorite, setFavoriteOrder }
+  /**
+   * Writes a reference for each context of an ordered Lexeme that has none, such as a new favorite, where it lists now.
+   * Call it after this device's own writes, so a device that only receives writes nothing.
+   */
+  const repair = (): Promise<Operation[]> => view.repair()
+
+  return { view, getLexemesByIds, moveFavorite, setFavoriteOrder, repair }
 }
 
 export default createLexemeIndex
