@@ -338,16 +338,7 @@ const createTreecrdtDataProvider = () => {
             ? await lexemes.setFavoriteOrder(updates.favoriteOrder)
             : []
         const ops = await updateThoughtsForClient(client, replicaId, updates)
-        // A thought these writes add to an ordered Lexeme, such as a new favorite, gets its reference where it lists. A
-        // failed repair is retried after the next write, and must not keep this batch's ops from being pushed.
-        const repairOps =
-          ops.length > 0
-            ? await lexemes.repair().catch(err => {
-                console.error('TreeCRDT Lexeme repair failed', err)
-                return []
-              })
-            : []
-        return [...orderOps, ...ops, ...repairOps]
+        return [...orderOps, ...ops]
       },
     }
 

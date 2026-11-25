@@ -5,7 +5,7 @@ import type Lexeme from '../../@types/Lexeme'
 import type ThoughtId from '../../@types/ThoughtId'
 import type Timestamp from '../../@types/Timestamp'
 import hashThought from '../../util/hashThought'
-import { LEXEME_PATH, decodeThoughtPayload } from './payload'
+import { LEXEME_PATH, type ThoughtPayload } from './payload'
 import { createTreecrdtLocalWriteOptions } from './writeBarrier'
 
 const FAVORITES = hashThought('=favorite')
@@ -34,9 +34,9 @@ const longestIncreasing = (positions: number[]): Set<number> => {
 
 /**
  * Lexemes are a TreeCRDT view whose groups are the Lexeme keys in thought payloads. SQLite indexes the key in the write
- * that sets the value, so a Lexeme always matches the values and nothing derives or stores its contexts. Unordered
- * Lexemes list their contexts by created time. The first drag orders a Lexeme: it becomes a subtree of the document,
- * with a reference node per context's parent that is ordered like any thought.
+ * that sets the value, so a Lexeme always matches the values and nothing derives or stores its contexts. Contexts list
+ * by created time until someone drags them. A drag writes only a reference node for the dragged context's parent,
+ * ordered like any thought under the Lexeme's node, which the first drag adds.
  */
 const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) => {
   const view = await createTreecrdtView(client, {
@@ -46,9 +46,9 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
     // A Favorites reference is the favorited thought, so a thought favorited again keeps its place.
     reference: 'parent',
     // The view clamps the rank, so an odd created time (a pasted Roam create-time, say) still lists.
-    rank: ({ payload }) => Number(decodeThoughtPayload(payload).created),
+    rank: ({ payload }) => Number((payload as ThoughtPayload).created),
     data: ({ payload }): Metadata => {
-      const { created, lastUpdated, updatedBy } = decodeThoughtPayload(payload)
+      const { created, lastUpdated, updatedBy } = payload as ThoughtPayload
       return { created: created as Timestamp, lastUpdated: lastUpdated as Timestamp, updatedBy }
     },
     // Tag the view's writes like the app's other writes, so the readback treats them as local.
@@ -86,7 +86,7 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
     })
   }
 
-  /** A Favorites drag. The first one orders Favorites, pinning every favorite where it shows. */
+  /** A Favorites drag: writes the dragged favorite's reference, and nothing for the favorites around it. */
   const moveFavorite = (id: ThoughtId, before: ThoughtId | null): Promise<Operation[]> =>
     view.place(FAVORITES, id, { before })
 
@@ -114,13 +114,7 @@ const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) =>
     return ops
   }
 
-  /**
-   * Writes a reference for each context of an ordered Lexeme that has none, such as a new favorite, where it lists now.
-   * Call it after this device's own writes, so a device that only receives writes nothing.
-   */
-  const repair = (): Promise<Operation[]> => view.repair()
-
-  return { view, getLexemesByIds, moveFavorite, setFavoriteOrder, repair }
+  return { view, getLexemesByIds, moveFavorite, setFavoriteOrder }
 }
 
 export default createLexemeIndex
