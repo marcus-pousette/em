@@ -1,7 +1,16 @@
-import { createTreecrdtClient } from '@treecrdt/wa-sqlite'
+import type { Operation } from '@treecrdt/interface'
+import { type TreecrdtClient, createTreecrdtClient } from '@treecrdt/wa-sqlite'
 import type ThoughtId from '../../../@types/ThoughtId'
 import type Timestamp from '../../../@types/Timestamp'
-import { EM_TOKEN, SETTINGS_TOKEN, SETTINGS_VALUE } from '../../../constants'
+import {
+  ABSOLUTE_TOKEN,
+  EM_TOKEN,
+  GLOBAL_ROOT_TOKEN,
+  HOME_TOKEN,
+  ROOT_PARENT_ID,
+  SETTINGS_TOKEN,
+  SETTINGS_VALUE,
+} from '../../../constants'
 import hashThought from '../../../util/hashThought'
 import type { DataProvider } from '../../DataProvider'
 import { encodeThoughtPayload } from '../payload'
@@ -26,16 +35,22 @@ const THOUGHT_A_ID = '00000000000000000000000000000112' as ThoughtId
 const THOUGHT_Y_ID = '00000000000000000000000000000113' as ThoughtId
 const THOUGHT_B_ID = '00000000000000000000000000000114' as ThoughtId
 const THOUGHT_X_ID = '00000000000000000000000000000115' as ThoughtId
+// The =favorite children that favorite the thoughts above.
+const FAVORITE_A_ID = '00000000000000000000000000000122' as ThoughtId
+const FAVORITE_Y_ID = '00000000000000000000000000000123' as ThoughtId
+const FAVORITE_B_ID = '00000000000000000000000000000124' as ThoughtId
+const FAVORITE_X_ID = '00000000000000000000000000000125' as ThoughtId
+const FAVORITE_X_AGAIN_ID = '00000000000000000000000000000126' as ThoughtId
 
 /** Creates a minimal thought fixture for provider-level ordering tests. */
-const thought = (id: ThoughtId, parentId: ThoughtId, value: string, rank: number) => ({
+const thought = (id: ThoughtId, parentId: ThoughtId, value: string, rank: number, created = 1) => ({
   id,
   parentId,
   value,
   rank,
   childrenMap: {},
-  created: 1 as Timestamp,
-  lastUpdated: 1 as Timestamp,
+  created: created as Timestamp,
+  lastUpdated: created as Timestamp,
   updatedBy: 'test',
 })
 
@@ -56,6 +71,52 @@ const persistThoughts = (
   movePlacements?: Record<ThoughtId, ThoughtId | null>,
 ) => persistThoughtsTo(treecrdtThoughtspace, thoughts, movePlacements)
 
+/** A top-level thought and the =favorite child that favorites it, both created at `created`. */
+const favorite = (thoughtId: ThoughtId, favoriteId: ThoughtId, created: number) => [
+  thought(thoughtId, ROOT_PARENT_ID, `thought ${created}`, created, created),
+  thought(favoriteId, thoughtId, '=favorite', 0, created),
+]
+
+/** Opens a device of the `docId` thoughtspace that holds `ops`, with a bound provider, closed when the test finishes. */
+const openDevice = async (docId: string, replica: number, ops: Operation[] = []) => {
+  const client = await createTreecrdtClient({ docId })
+  const closers: (() => Promise<void>)[] = [() => client.drop()]
+  onTestFinished(async () => {
+    for (const close of closers.reverse()) await close()
+  })
+  if (ops.length > 0) await client.ops.appendMany(ops)
+  const provider = createTreecrdtDataProvider()
+  closers.push(await provider.bindClient(client, new Uint8Array(32).fill(replica)))
+  return {
+    client,
+    db: provider.db,
+    /** The Favorites Lexeme as this device reads it. */
+    favorites: () => provider.db.getLexemeById(hashThought('=favorite')),
+  }
+}
+
+/** Gives each client every op the other has. */
+const exchangeOps = async (a: TreecrdtClient, b: TreecrdtClient) => {
+  await b.ops.appendMany(await a.ops.all())
+  await a.ops.appendMany(await b.ops.all())
+}
+
+/**
+ * Opens devices `a` and `b` of one thoughtspace. Device `a` favorites thoughts A, B and X, created in that order, through
+ * its provider, and `b` receives them.
+ */
+const openFavoritesDevices = async (docId: string) => {
+  const a = await openDevice(docId, 1)
+  const b = await openDevice(docId, 2)
+  await persistThoughtsTo(a.db, [
+    ...favorite(THOUGHT_A_ID, FAVORITE_A_ID, 10),
+    ...favorite(THOUGHT_B_ID, FAVORITE_B_ID, 20),
+    ...favorite(THOUGHT_X_ID, FAVORITE_X_ID, 30),
+  ])
+  await exchangeOps(a.client, b.client)
+  return { a, b }
+}
+
 afterEach(async () => {
   await treecrdt.drop()
 })
@@ -75,6 +136,12 @@ it('seeds fixed system thoughts in the TreeCRDT provider', async () => {
 
   const settingsLexeme = await treecrdtThoughtspace.getLexemeById(hashThought(SETTINGS_VALUE))
   expect(settingsLexeme?.contexts).toEqual([SETTINGS_TOKEN])
+
+  // Root payloads carry no Lexeme key.
+  const roots = [GLOBAL_ROOT_TOKEN, HOME_TOKEN, EM_TOKEN, ABSOLUTE_TOKEN]
+  await expect(treecrdtThoughtspace.getLexemesByIds(roots.map(hashThought))).resolves.toEqual(
+    roots.map(() => undefined),
+  )
 })
 
 it('does not write seed operations again when binding a seeded client', async () => {
@@ -247,34 +314,129 @@ it('keeps separately created thoughtspace instances isolated', async () => {
   }
 })
 
-it('derives memberships from existing thoughts and preserves the saved order of live favorites on upgrade', async () => {
-  const client = await createTreecrdtClient({ docId: 'upgrade-favorites' })
-  const replicaId = new Uint8Array(32).fill(1)
+it('keeps a payload that is not a thought out of Lexemes and indexes later thoughts', async () => {
+  const report = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  const client = await createTreecrdtClient({ docId: 'undecodable-payload' })
+  const replica = new Uint8Array(32).fill(1)
   try {
-    const older = await client.onMaterializedDurable('em-derived-indexes', () => undefined, { version: 1 })
-    const payload = encodeThoughtPayload({ value: '=favorite', created: 1, lastUpdated: 1, updatedBy: 'test' })
-    await client.local.insert(replicaId, client.tree.root.id, THOUGHT_B_ID, { type: 'last' }, payload)
-    await client.local.insert(replicaId, client.tree.root.id, THOUGHT_Y_ID, { type: 'last' }, payload)
-    await older.close()
-    // The old cache contains a stale member and explicitly orders B before Y (the reverse of their id order).
-    await client.runner.exec('CREATE TABLE em_lexemes (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL)')
-    await client.runner.run('INSERT INTO em_lexemes VALUES (?1, ?2)', [
-      hashThought('=favorite'),
-      JSON.stringify({
-        contexts: [THOUGHT_B_ID, THOUGHT_X_ID, THOUGHT_Y_ID],
-        created: 1,
-        lastUpdated: 1,
-        updatedBy: 'test',
-      }),
-    ])
-
     const provider = createTreecrdtDataProvider()
-    const close = await provider.bindClient(client, replicaId)
-    await expect(provider.db.getLexemeById(hashThought('=favorite'))).resolves.toMatchObject({
-      contexts: [THOUGHT_B_ID, THOUGHT_Y_ID],
-    })
+    const close = await provider.bindClient(client, replica)
+    // A peer's payload that is not a thought (corrupt, or not decryptable on this device yet) has no Lexeme key, so it
+    // joins no Lexeme, and neither its write nor a later one fails.
+    await client.local.insert(
+      new Uint8Array(32).fill(2),
+      client.tree.root.id,
+      THOUGHT_X_ID,
+      { type: 'last' },
+      new TextEncoder().encode('not json'),
+    )
+    const later = encodeThoughtPayload(THOUGHT_Y_ID, { value: 'later', created: 1, lastUpdated: 1, updatedBy: 'test' })
+    await client.local.insert(replica, client.tree.root.id, THOUGHT_Y_ID, { type: 'last' }, later)
+
+    await expect(provider.db.getLexemeById(hashThought('later'))).resolves.toMatchObject({ contexts: [THOUGHT_Y_ID] })
+    expect(report).not.toHaveBeenCalled()
     await close()
   } finally {
+    report.mockRestore()
     await client.drop()
   }
+})
+
+it('syncs the Favorites order between devices, writing only the dragged favorite', async () => {
+  const { a, b } = await openFavoritesDevices('favorites-sync')
+  await expect(b.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_A_ID, FAVORITE_B_ID, FAVORITE_X_ID] })
+
+  // Device A drags X to the top. The first drag orders Favorites: the view's root and group nodes, and X's reference at
+  // the drop. Nothing is written for A and B, which keep listing by created time. The ops are returned, so live sync
+  // pushes them.
+  const opsA = (await a.client.ops.all()).length
+  const returned = await a.db.updateThoughts({
+    thoughtIndexUpdates: {},
+    favoriteMove: { id: FAVORITE_X_ID, before: FAVORITE_A_ID },
+  })
+  expect((await a.client.ops.all()).length - opsA).toBe(3)
+  expect(returned).toHaveLength(3)
+  await expect(a.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_X_ID, FAVORITE_A_ID, FAVORITE_B_ID] })
+  await exchangeOps(a.client, b.client)
+  await expect(b.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_X_ID, FAVORITE_A_ID, FAVORITE_B_ID] })
+
+  // Device B drags A to the end: one insert, A's reference.
+  const opsB = (await b.client.ops.all()).length
+  await b.db.updateThoughts({ thoughtIndexUpdates: {}, favoriteMove: { id: FAVORITE_A_ID, before: null } })
+  expect((await b.client.ops.all()).length - opsB).toBe(1)
+
+  // Before syncing, device A (still showing X, A, B) drags B to the top. Only B is written, so A stays where device B
+  // put it.
+  await a.db.updateThoughts({ thoughtIndexUpdates: {}, favoriteMove: { id: FAVORITE_B_ID, before: FAVORITE_X_ID } })
+  await exchangeOps(a.client, b.client)
+  await expect(a.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_B_ID, FAVORITE_X_ID, FAVORITE_A_ID] })
+  await expect(b.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_B_ID, FAVORITE_X_ID, FAVORITE_A_ID] })
+
+  // A new device that receives everything shows the same order and writes nothing of its own.
+  const c = await openDevice('favorites-sync', 3, await a.client.ops.all())
+  await expect(c.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_B_ID, FAVORITE_X_ID, FAVORITE_A_ID] })
+  expect((await c.client.ops.all()).length).toBe((await a.client.ops.all()).length)
+})
+
+it('keeps the place of a thought favorited again', async () => {
+  const device = await openDevice('favorite-again', 1)
+  await persistThoughtsTo(device.db, [
+    ...favorite(THOUGHT_A_ID, FAVORITE_A_ID, 10),
+    ...favorite(THOUGHT_B_ID, FAVORITE_B_ID, 20),
+    ...favorite(THOUGHT_X_ID, FAVORITE_X_ID, 30),
+  ])
+  await device.db.updateThoughts({
+    thoughtIndexUpdates: {},
+    favoriteMove: { id: FAVORITE_X_ID, before: FAVORITE_A_ID },
+  })
+  await expect(device.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_X_ID, FAVORITE_A_ID, FAVORITE_B_ID] })
+
+  // Unfavoriting X deletes its =favorite child, and favoriting it again creates another. That one shows where X was
+  // dragged, since the reference stands for X, and needs no reference of its own.
+  await device.db.updateThoughts({ thoughtIndexUpdates: { [FAVORITE_X_ID]: null } })
+  await expect(device.favorites()).resolves.toMatchObject({ contexts: [FAVORITE_A_ID, FAVORITE_B_ID] })
+  const again = await persistThoughtsTo(device.db, [thought(FAVORITE_X_AGAIN_ID, THOUGHT_X_ID, '=favorite', 0, 40)])
+  expect(again).toHaveLength(1)
+  await expect(device.favorites()).resolves.toMatchObject({
+    contexts: [FAVORITE_X_AGAIN_ID, FAVORITE_A_ID, FAVORITE_B_ID],
+  })
+})
+
+it('lists a favorite added after the drag at its default spot, on both devices', async () => {
+  const { a, b } = await openFavoritesDevices('favorite-added')
+  await a.db.updateThoughts({ thoughtIndexUpdates: {}, favoriteMove: { id: FAVORITE_X_ID, before: FAVORITE_A_ID } })
+
+  // Device A favorites Y, created between A and B. Only the two thoughts are written: Y lists by its created time among
+  // the favorites nobody dragged, and X keeps the place it was dragged to.
+  const returned = (await persistThoughtsTo(a.db, favorite(THOUGHT_Y_ID, FAVORITE_Y_ID, 15))) as readonly Operation[]
+  expect(returned.map(op => op.kind)).toMatchObject([
+    { type: 'insert', node: THOUGHT_Y_ID },
+    { type: 'insert', node: FAVORITE_Y_ID },
+  ])
+  const order = [FAVORITE_X_ID, FAVORITE_A_ID, FAVORITE_Y_ID, FAVORITE_B_ID]
+  await expect(a.favorites()).resolves.toMatchObject({ contexts: order })
+  await exchangeOps(a.client, b.client)
+  await expect(b.favorites()).resolves.toMatchObject({ contexts: order })
+})
+
+it('writes nothing on a device that only receives Favorites changes', async () => {
+  const { a, b } = await openFavoritesDevices('favorites-receiver')
+  const held = (await b.client.ops.all()).length
+  const ordering = (await a.db.updateThoughts({
+    thoughtIndexUpdates: {},
+    favoriteMove: { id: FAVORITE_X_ID, before: FAVORITE_A_ID },
+  })) as readonly Operation[]
+  const added = (await persistThoughtsTo(a.db, favorite(THOUGHT_Y_ID, FAVORITE_Y_ID, 15))) as readonly Operation[]
+
+  // Sync delivers Y before the drag that preceded it. Device B lists Favorites as each delivery leaves them, and writes
+  // nothing.
+  await b.client.ops.appendMany([...added])
+  await expect(b.favorites()).resolves.toMatchObject({
+    contexts: [FAVORITE_A_ID, FAVORITE_Y_ID, FAVORITE_B_ID, FAVORITE_X_ID],
+  })
+  await b.client.ops.appendMany([...ordering])
+  await expect(b.favorites()).resolves.toMatchObject({
+    contexts: [FAVORITE_X_ID, FAVORITE_A_ID, FAVORITE_Y_ID, FAVORITE_B_ID],
+  })
+  expect((await b.client.ops.all()).length).toBe(held + ordering.length + added.length)
 })

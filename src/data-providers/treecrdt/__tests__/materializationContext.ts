@@ -4,11 +4,13 @@ import type Timestamp from '../../../@types/Timestamp'
 import { EM_TOKEN, SETTINGS_TOKEN } from '../../../constants'
 import hashThought from '../../../util/hashThought'
 import type { ThoughtspaceMaterializationSnapshot } from '../../thoughtspace'
+import { encodeThoughtPayload } from '../payload'
 import { waitForMaterializedThoughtsToStore } from '../sync/materializationQueue'
 import createTreecrdtDataProvider from '../thoughtspace'
 import { withTreecrdtWriteBarrier } from '../writeBarrier'
 
 const THOUGHT_ID = '00000000000000000000000000000201' as ThoughtId
+const OTHER_ID = '00000000000000000000000000000205' as ThoughtId
 
 /** Creates a minimal thought fixture. */
 const thought = (value: string) => ({
@@ -52,6 +54,17 @@ afterEach(async () => {
   await client.drop()
 })
 
+/** Persists THOUGHT_ID and OTHER_ID with the value 'a' and publishes their Lexeme. */
+const persistTwoContexts = async () => {
+  await withTreecrdtWriteBarrier(() =>
+    provider.db.updateThoughts({
+      thoughtIndexUpdates: { [THOUGHT_ID]: thought('a'), [OTHER_ID]: { ...thought('a'), id: OTHER_ID } },
+    }),
+  )
+  await waitForMaterializedThoughtsToStore()
+  expect(snapshot.lexemeIndex[hashThought('a')].contexts).toEqual([THOUGHT_ID, OTHER_ID])
+}
+
 it('publishes coalesced local events once without republishing local thoughts', async () => {
   await withTreecrdtWriteBarrier(async () => {
     await provider.db.updateThoughts({ thoughtIndexUpdates: { [THOUGHT_ID]: thought('a') } })
@@ -64,16 +77,29 @@ it('publishes coalesced local events once without republishing local thoughts', 
   expect(snapshot.lexemeIndex[hashThought('b')].contexts).toEqual([THOUGHT_ID])
 
   apply.mockClear()
-  // A move writes the thought again with a newer lastUpdated. That is a payload change, but no membership changes, so
-  // nothing is republished.
+  // A payload change that keeps the thought's Lexeme, such as a newer lastUpdated, republishes nothing.
   await withTreecrdtWriteBarrier(() =>
     provider.db.updateThoughts({
       thoughtIndexUpdates: { [THOUGHT_ID]: { ...thought('b'), lastUpdated: 2 as Timestamp } },
-      movePlacements: { [THOUGHT_ID]: SETTINGS_TOKEN },
     }),
   )
   await waitForMaterializedThoughtsToStore()
   expect(apply).not.toHaveBeenCalled()
+
+  // A move writes the thought again with a newer lastUpdated. TreeCRDT names the Lexeme of every node it moves, so the
+  // Lexeme is read again and republished with that lastUpdated. The thought is local, so it is not.
+  await withTreecrdtWriteBarrier(() =>
+    provider.db.updateThoughts({
+      thoughtIndexUpdates: { [THOUGHT_ID]: { ...thought('b'), lastUpdated: 3 as Timestamp } },
+      movePlacements: { [THOUGHT_ID]: SETTINGS_TOKEN },
+    }),
+  )
+  await waitForMaterializedThoughtsToStore()
+  expect(apply).toHaveBeenCalledTimes(1)
+  expect(apply.mock.calls[0][0]).toEqual({
+    thoughtIndex: {},
+    lexemeIndex: { [hashThought('b')]: expect.objectContaining({ contexts: [THOUGHT_ID], lastUpdated: 3 }) },
+  })
 })
 
 it('retries stale membership readback after a newer optimistic rename and persistence', async () => {
@@ -182,14 +208,43 @@ it('updates stored memberships on incoming deletion even when its thought was no
   expect(snapshot.thoughtIndex[THOUGHT_ID]).toBeNull()
 })
 
-it('publishes nothing for an event that fails to index', async () => {
-  const report = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-  // A membership needs the payload's timestamps, so indexing this insert fails.
-  const brokenId = '00000000000000000000000000000203' as ThoughtId
-  const payload = new TextEncoder().encode(JSON.stringify({ value: 'x' }))
-  await client.local.insert(new Uint8Array(32).fill(2), EM_TOKEN, brokenId, { type: 'last' }, payload)
+it('republishes the Lexeme a renamed thought left even when the thought is not loaded', async () => {
+  await persistTwoContexts()
+  apply.mockClear()
+
+  await withTreecrdtWriteBarrier(() =>
+    provider.db.updateThoughts({ thoughtIndexUpdates: { [THOUGHT_ID]: thought('b') } }),
+  )
   await waitForMaterializedThoughtsToStore()
 
-  expect(apply).not.toHaveBeenCalled()
-  report.mockRestore()
+  // Redux never loaded the thought, so only the payload index knows the Lexeme it left.
+  expect(snapshot.thoughtIndex[THOUGHT_ID]).toBeUndefined()
+  expect(apply).toHaveBeenCalledTimes(1)
+  expect(snapshot.lexemeIndex[hashThought('a')].contexts).toEqual([OTHER_ID])
+  expect(snapshot.lexemeIndex[hashThought('b')].contexts).toEqual([THOUGHT_ID])
+})
+
+it('republishes the Lexeme a remote rename left even when the thought is not loaded', async () => {
+  await persistTwoContexts()
+
+  // Another device renames the thought. Its payload change carries only the new value, and Redux has not loaded the
+  // thought, so only the payload index knows the Lexeme it left.
+  const peer = await createTreecrdtClient({ docId: 'materialization-context' })
+  try {
+    await peer.ops.appendMany(await client.ops.all())
+    const rename = await peer.local.payload(
+      new Uint8Array(32).fill(2),
+      THOUGHT_ID,
+      encodeThoughtPayload(THOUGHT_ID, { value: 'b', created: 1, lastUpdated: 2, updatedBy: 'peer' }),
+    )
+    expect(snapshot.thoughtIndex[THOUGHT_ID]).toBeUndefined()
+    await client.ops.appendMany([rename])
+  } finally {
+    await peer.drop()
+  }
+  await waitForMaterializedThoughtsToStore()
+
+  expect(snapshot.lexemeIndex[hashThought('a')].contexts).toEqual([OTHER_ID])
+  expect(snapshot.lexemeIndex[hashThought('b')].contexts).toEqual([THOUGHT_ID])
+  expect(snapshot.thoughtIndex[THOUGHT_ID]).toMatchObject({ value: 'b', updatedBy: 'peer' })
 })

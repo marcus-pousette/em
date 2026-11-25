@@ -122,7 +122,8 @@ const drop = (
 
   store.dispatch(
     updateThoughts({
-      favoriteOrder: contextsNew,
+      // The drag itself, not the whole list: a list computed from a stale order would also move members nobody dragged.
+      favoriteMove: { id: fromId, before: contextsNew[contextsNew.indexOf(fromId) + 1] ?? null },
       thoughtIndexUpdates: {},
       lexemeIndexUpdates: {
         [hashThought('=favorite')]: lexemeNew,

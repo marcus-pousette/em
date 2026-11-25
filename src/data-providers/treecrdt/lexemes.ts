@@ -1,143 +1,120 @@
-import type { Change } from '@treecrdt/interface/engine'
+import type { Operation } from '@treecrdt/interface'
+import { createTreecrdtView } from '@treecrdt/interface/views'
 import type { TreecrdtClient } from '@treecrdt/wa-sqlite'
 import type Lexeme from '../../@types/Lexeme'
 import type ThoughtId from '../../@types/ThoughtId'
-import { GLOBAL_ROOT_TOKEN } from '../../constants'
+import type Timestamp from '../../@types/Timestamp'
 import hashThought from '../../util/hashThought'
-import { decodeThoughtPayload } from './payload'
-import { SYSTEM_ROOT_THOUGHT_IDS } from './systemThoughtIds'
+import { LEXEME_PATH, type ThoughtPayload } from './payload'
+import { createTreecrdtLocalWriteOptions } from './writeBarrier'
 
-const TABLE = 'em_lexeme_memberships'
-const ROOT_IDS = new Set<string>([GLOBAL_ROOT_TOKEN, ...SYSTEM_ROOT_THOUGHT_IDS])
+const FAVORITES = hashThought('=favorite')
 
-/** Maintains one membership per live thought, independent of which contexts Redux has loaded. */
-const createLexemeIndex = async (client: TreecrdtClient) => {
-  await client.runner.exec(`
-    CREATE TABLE IF NOT EXISTS ${TABLE} (
-      thought_id TEXT PRIMARY KEY NOT NULL,
-      lexeme_hash TEXT NOT NULL,
-      created INTEGER NOT NULL,
-      last_updated INTEGER NOT NULL,
-      updated_by TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_${TABLE}_hash ON ${TABLE} (lexeme_hash);
-    CREATE TABLE IF NOT EXISTS em_favorite_order (
-      id INTEGER PRIMARY KEY CHECK (id = 1), contexts_json TEXT NOT NULL
-    );
-  `)
+type Metadata = Pick<Lexeme, 'created' | 'lastUpdated' | 'updatedBy'>
 
-  // On upgrade, keep the one piece of user data in the old Lexeme cache: the manual order of Favorites.
-  if (await client.runner.getText("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'em_lexemes'")) {
-    await client.runner.run(
-      `INSERT OR IGNORE INTO em_favorite_order (id, contexts_json)
-       SELECT 1, payload_json->'contexts' FROM em_lexemes WHERE id = ?1`,
-      [hashThought('=favorite')],
-    )
-  }
-
-  /** Saves explicit ordering intent separately from membership updates, which must not prune it. */
-  const setFavoriteOrder = (contexts: ThoughtId[]) =>
-    client.runner.run('INSERT OR REPLACE INTO em_favorite_order (id, contexts_json) VALUES (1, ?1)', [
-      JSON.stringify(contexts),
-    ])
-
-  /** Updates memberships from one event's changes and returns the hashes of Lexemes a thought joined or left. */
-  const applyChanges = async (changes: readonly Change[]): Promise<string[]> => {
-    // Keep each thought's last value, or null once it is gone: one event can carry several changes for one thought.
-    const latest = new Map<string, Uint8Array | null>()
-    // Hashes of each thought's values in the event. A later write may have replaced one in storage while Redux still
-    // shows it.
-    const carried = new Map<string, Set<string>>()
-    for (const change of changes) {
-      if (change.kind !== 'move' && !ROOT_IDS.has(change.node)) {
-        const payload = change.kind === 'delete' ? null : change.payload
-        latest.set(change.node, payload)
-        const hashes = carried.get(change.node) ?? new Set<string>()
-        if (payload) hashes.add(hashThought(decodeThoughtPayload(payload).value))
-        carried.set(change.node, hashes)
-      }
+/** Indexes (into `positions`) of one longest increasing subsequence: the members a reorder can leave in place. */
+const longestIncreasing = (positions: number[]): Set<number> => {
+  const tails: number[] = []
+  const previous: number[] = []
+  positions.forEach((position, i) => {
+    let lo = 0
+    let hi = tails.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (positions[tails[mid]] < position) lo = mid + 1
+      else hi = mid
     }
-    if (latest.size === 0) return []
-    // The hash each thought is listed under now, which loses it if the value changed or the thought is gone.
-    const before = new Map(
-      JSON.parse(
-        (await client.runner.getText(
-          `SELECT json_group_array(json_array(thought_id, lexeme_hash)) FROM ${TABLE}
-           WHERE thought_id IN (SELECT value FROM json_each(?1))`,
-          [JSON.stringify([...latest.keys()])],
-        ))!,
-      ) as [string, string][],
-    )
-    const gone = [...latest.keys()].filter(id => !latest.get(id))
-    const rows = [...latest].flatMap(([id, payload]) => {
-      if (!payload) return []
-      const { value, created, lastUpdated, updatedBy } = decodeThoughtPayload(payload)
-      return [[id, hashThought(value), created, lastUpdated, updatedBy]]
-    })
-    if (gone.length > 0) {
-      await client.runner.run(`DELETE FROM ${TABLE} WHERE thought_id IN (SELECT value FROM json_each(?1))`, [
-        JSON.stringify(gone),
-      ])
-    }
-    if (rows.length > 0) {
-      await client.runner.run(
-        `INSERT OR REPLACE INTO ${TABLE} (thought_id, lexeme_hash, created, last_updated, updated_by)
-         SELECT value->>0, value->>1, value->>2, value->>3, value->>4 FROM json_each(?1)`,
-        [JSON.stringify(rows)],
-      )
-    }
-    const affected = new Set<string>()
-    for (const [id, payload] of latest) {
-      const hashes = carried.get(id)!
-      const old = before.get(id)
-      if (old) hashes.add(old)
-      // A thought that keeps its value, as a move's thought and both parents do when their lastUpdated is bumped, stays
-      // in its Lexeme. One listed under another hash, or listed only before or only now, joined or left one.
-      if (hashes.size > 1 || !old !== !payload) hashes.forEach(hash => affected.add(hash))
-    }
-    return [...affected]
-  }
+    previous[i] = lo > 0 ? tails[lo - 1] : -1
+    tails[lo] = i
+  })
+  const kept = new Set<number>()
+  for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = previous[i]) kept.add(i)
+  return kept
+}
 
-  /** Removes every membership before a full read rebuilds them. */
-  const clear = () => client.runner.exec(`DELETE FROM ${TABLE}`)
+/**
+ * Lexemes are a TreeCRDT view whose groups are the Lexeme keys in thought payloads. SQLite indexes the key in the write
+ * that sets the value, so a Lexeme always matches the values and nothing derives or stores its contexts. Contexts list
+ * by created time until someone drags them. A drag writes only a reference node for the dragged context's parent,
+ * ordered like any thought under the Lexeme's node, which the first drag adds.
+ */
+const createLexemeIndex = async (client: TreecrdtClient, replica: Uint8Array) => {
+  const view = await createTreecrdtView(client, {
+    name: 'em-lexemes',
+    index: { name: 'em_lexemes', path: LEXEME_PATH },
+    replica,
+    // A Favorites reference is the favorited thought, so a thought favorited again keeps its place.
+    reference: 'parent',
+    // The view clamps the rank, so an odd created time (a pasted Roam create-time, say) still lists.
+    rank: ({ payload }) => Number((payload as ThoughtPayload).created),
+    data: ({ payload }): Metadata => {
+      const { created, lastUpdated, updatedBy } = payload as ThoughtPayload
+      return { created: created as Timestamp, lastUpdated: lastUpdated as Timestamp, updatedBy }
+    },
+    // Tag the view's writes like the app's other writes, so the readback treats them as local.
+    writeOptions: createTreecrdtLocalWriteOptions,
+    onError: (error, node) => console.error('TreeCRDT Lexeme view skipped a thought', node, error),
+  })
 
-  /** Assembles Lexemes from memberships, preserving requested key order. */
+  /** Assembles Lexemes in display order, preserving requested key order. */
   const getLexemesByIds = async (keys: string[]): Promise<(Lexeme | undefined)[]> => {
     if (keys.length === 0) return []
-    const text = await client.runner.getText(
-      `SELECT json_group_array(json_object('id', thought_id, 'key', lexeme_hash,
-        'created', created, 'lastUpdated', last_updated, 'updatedBy', updated_by) ORDER BY created, thought_id)
-       FROM ${TABLE} WHERE lexeme_hash IN (SELECT value FROM json_each(?1))`,
-      [JSON.stringify(keys)],
-    )
-    const rows = JSON.parse(text!) as (Omit<Lexeme, 'contexts'> & { id: ThoughtId; key: string })[]
-    const lexemes = new Map<string, Lexeme>()
-    for (const { id, key, created, lastUpdated, updatedBy } of rows) {
-      const lexeme = lexemes.get(key)
-      if (!lexeme) {
-        lexemes.set(key, { contexts: [id], created, lastUpdated, updatedBy })
-      } else {
-        lexeme.contexts.push(id)
-        if (lastUpdated >= lexeme.lastUpdated) {
-          lexeme.lastUpdated = lastUpdated
-          lexeme.updatedBy = updatedBy
-        }
+    const groups = await view.members(keys)
+    return keys.map(key => {
+      const members = groups.get(key)
+      if (!members?.length) return undefined
+      let created = Infinity
+      let newest: { id: string; data: Metadata } | undefined
+      for (const member of members) {
+        const data = member.data as Metadata
+        created = Math.min(created, data.created)
+        // Like the former SQL read: the newest lastUpdated, ties going to the later (created, id).
+        if (
+          !newest ||
+          data.lastUpdated > newest.data.lastUpdated ||
+          (data.lastUpdated === newest.data.lastUpdated &&
+            (data.created > newest.data.created || (data.created === newest.data.created && member.id > newest.id)))
+        )
+          newest = { id: member.id, data }
       }
-    }
-    const favorites = lexemes.get(hashThought('=favorite'))
-    if (favorites) {
-      const text = await client.runner.getText('SELECT contexts_json FROM em_favorite_order WHERE id = 1')
-      const order = new Set(JSON.parse(text ?? '[]') as ThoughtId[])
-      const members = new Set(favorites.contexts)
-      favorites.contexts = [
-        ...[...order].filter(id => members.has(id)),
-        ...favorites.contexts.filter(id => !order.has(id)),
-      ]
-    }
-    return keys.map(key => lexemes.get(key))
+      return {
+        contexts: members.map(member => member.id as ThoughtId),
+        created: created as Timestamp,
+        lastUpdated: newest!.data.lastUpdated,
+        updatedBy: newest!.data.updatedBy,
+      }
+    })
   }
 
-  return { applyChanges, clear, setFavoriteOrder, getLexemesByIds }
+  /** A Favorites drag: writes the dragged favorite's reference, and nothing for the favorites around it. */
+  const moveFavorite = (id: ThoughtId, before: ThoughtId | null): Promise<Operation[]> =>
+    view.place(FAVORITES, id, { before })
+
+  /**
+   * Moves each member that the requested Favorites order moves, and none of the members it keeps in place. Callers that
+   * know the drag should use moveFavorite: a list read from a stale order moves members nobody dragged.
+   */
+  const setFavoriteOrder = async (contexts: ThoughtId[]): Promise<Operation[]> => {
+    const current = ((await view.members([FAVORITES])).get(FAVORITES) ?? []).map(member => member.id)
+    const position = new Map(current.map((id, i) => [id, i]))
+    // Members the caller did not list keep their relative order after the listed ones.
+    const listed = [...new Set<string>(contexts)].filter(id => position.has(id))
+    const wanted = [...listed, ...current.filter(id => !listed.includes(id))]
+    const kept = longestIncreasing(wanted.map(id => position.get(id)!))
+    const ops: Operation[] = []
+    // Right to left, so each member is placed before a successor that is already where it will stay. A member that
+    // left meanwhile (a remote unfavorite) is skipped, and the next listed member that is still there takes its place.
+    for (let i = wanted.length - 1; i >= 0; i--) {
+      if (kept.has(i)) continue
+      const live = new Set(((await view.members([FAVORITES])).get(FAVORITES) ?? []).map(member => member.id))
+      if (!live.has(wanted[i])) continue
+      const before = wanted.slice(i + 1).find(id => live.has(id)) ?? null
+      ops.push(...(await view.place(FAVORITES, wanted[i], { before })))
+    }
+    return ops
+  }
+
+  return { view, getLexemesByIds, moveFavorite, setFavoriteOrder }
 }
 
 export default createLexemeIndex

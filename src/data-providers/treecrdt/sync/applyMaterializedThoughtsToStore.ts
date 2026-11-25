@@ -1,4 +1,5 @@
 import type { MaterializationEvent } from '@treecrdt/interface/engine'
+import { VIEW_NODE_PREFIX } from '@treecrdt/interface/views'
 import _ from 'lodash'
 import hashThought from '../../../util/hashThought'
 import type { DataProvider } from '../../DataProvider'
@@ -22,7 +23,12 @@ export const applyMaterializedThoughtsToStore = async ({ bridge, db, pending, is
     await waitForQueuedTreecrdtWrites()
     const entries = pending.slice()
     const keys = [...new Set(entries.flatMap(entry => entry.keys))]
-    const remoteChanges = entries.flatMap(({ event }) => (isTreecrdtLocalMaterialization(event) ? [] : event.changes))
+    const remoteChanges = entries.flatMap(({ event }) =>
+      isTreecrdtLocalMaterialization(event)
+        ? []
+        : // View nodes (references and folders) are not thoughts; their Lexeme is republished through `keys`.
+          event.changes.filter(change => !change.node.startsWith(VIEW_NODE_PREFIX)),
+    )
     const thoughtIndexUpdates = await refreshThoughtsFromMaterializationChanges(remoteChanges, db)
     const values = await db.getLexemesByIds(keys)
     const { thoughtIndex, lexemeIndex } = bridge.getSnapshot()
@@ -39,7 +45,7 @@ export const applyMaterializedThoughtsToStore = async ({ bridge, db, pending, is
           return thought !== snapshot.thoughtIndex[id] && (!thought || hashThought(thought.value) !== keys[i])
         }),
       ) ||
-      // An event indexed during the reads can split the thought reads or make a Lexeme list a remote change Redux does
+      // An event reported during the reads can split the thought reads or make a Lexeme list a remote change Redux does
       // not have yet. A local event can wait for the next round when this one reads no thoughts, since the checks above
       // cover its edit.
       pending
